@@ -35,6 +35,12 @@ import (
 // QR code. Google's relay drops unfinished pairings after a few minutes.
 const PairTimeout = 5 * time.Minute
 
+// sendMetadataTimeout bounds how long a write waits for the phone settings
+// event that carries SIM metadata. mautrix/gmessages includes this metadata
+// in send requests; sending without it can be accepted but not actually sent
+// on some devices.
+const sendMetadataTimeout = 10 * time.Second
+
 // EventHandler is invoked for each event delivered by libgm. The argument
 // type is one of the concrete types in pkg/libgm/events or pkg/libgm/gmproto.
 type EventHandler func(evt any)
@@ -49,6 +55,7 @@ type Client struct {
 
 	mu          sync.RWMutex
 	subscribers []EventHandler
+	settings    *gmproto.Settings
 }
 
 // Open loads session.json and returns a connected-but-not-yet-Connect()'d
@@ -155,45 +162,184 @@ type SendTextResult struct {
 // optional; when set, the new message is rendered as a quoted reply by the
 // recipient's client. The libgm long-poll must be Connected; call
 // WaitForReady first for fresh sessions.
-func (c *Client) SendText(conversationID, body, replyToID string) (*SendTextResult, error) {
+func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID string) (*SendTextResult, error) {
 	if conversationID == "" {
 		return nil, fmt.Errorf("conversation id is required")
 	}
 	if body == "" {
 		return nil, fmt.Errorf("message body is required")
 	}
+	settingsCtx, cancel := context.WithTimeout(ctx, sendMetadataTimeout)
+	defer cancel()
+	if err := c.WaitForSettings(settingsCtx); err != nil {
+		return nil, fmt.Errorf("wait for phone send settings: %w", err)
+	}
 	tmpID := uuid.NewString()
-	req := &gmproto.SendMessageRequest{
-		ConversationID: conversationID,
-		TmpID:          tmpID,
-		MessagePayload: &gmproto.MessagePayload{
-			ConversationID: conversationID,
-			TmpID:          tmpID,
-			TmpID2:         tmpID,
-			MessagePayloadContent: &gmproto.MessagePayloadContent{
-				MessageContent: &gmproto.MessageContent{Content: body},
-			},
-		},
+	req, err := c.buildSendTextRequest(conversationID, body, replyToID, tmpID)
+	if err != nil {
+		return nil, err
 	}
-	if replyToID != "" {
-		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
-	}
+	waitEcho, unsubscribe := c.watchMessageEcho(tmpID)
+	defer unsubscribe()
+
 	resp, err := c.libgm.SendMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("libgm send: %w", err)
 	}
 	if resp.GetStatus() != gmproto.SendMessageResponse_SUCCESS {
-		return nil, fmt.Errorf("send rejected by phone: status=%s", resp.GetStatus())
+		return nil, fmt.Errorf("send rejected by phone: %s", sendStatusMessage(resp))
 	}
-	// libgm doesn't echo the canonical message_id directly in the response;
-	// it arrives shortly after via the WrappedMessage event. Return the
-	// tmpID so the caller can correlate. Sync-pump-driven upserts will
-	// reconcile against the real message_id when it arrives.
+
+	echo, err := waitEcho(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("send accepted by phone, but no sent-message echo arrived for tmp_id %s: %w", tmpID, err)
+	}
 	return &SendTextResult{
-		MessageID:      tmpID,
-		ConversationID: conversationID,
+		MessageID:      echo.Message.GetMessageID(),
+		ConversationID: echo.Message.GetConversationID(),
 		TmpID:          tmpID,
 	}, nil
+}
+
+func (c *Client) buildSendTextRequest(conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, error) {
+	conv, err := c.libgm.GetConversation(conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("get conversation %s before send: %w", conversationID, err)
+	}
+	outgoingID := conv.GetDefaultOutgoingID()
+	if outgoingID == "" {
+		return nil, fmt.Errorf("conversation %s has no default outgoing participant; cannot choose sender/SIM", conversationID)
+	}
+	req := &gmproto.SendMessageRequest{
+		ConversationID: conversationID,
+		TmpID:          tmpID,
+		MessagePayload: &gmproto.MessagePayload{
+			ConversationID: conversationID,
+			ParticipantID:  outgoingID,
+			TmpID:          tmpID,
+			TmpID2:         tmpID,
+			MessageInfo: []*gmproto.MessageInfo{{
+				Data: &gmproto.MessageInfo_MessageContent{
+					MessageContent: &gmproto.MessageContent{Content: body},
+				},
+			}},
+		},
+	}
+	if sim := c.simForParticipant(outgoingID); sim != nil {
+		req.SIMPayload = sim.GetSIMData().GetSIMPayload()
+	} else {
+		return nil, fmt.Errorf("conversation %s uses outgoing participant %s, but no matching SIM metadata was received", conversationID, outgoingID)
+	}
+	if replyToID != "" {
+		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
+	}
+	return req, nil
+}
+
+// WaitForSettings blocks until libgm emits the phone settings event. Send
+// requests need its SIM metadata to match the browser client shape.
+func (c *Client) WaitForSettings(ctx context.Context) error {
+	c.mu.RLock()
+	hasSettings := c.settings != nil
+	c.mu.RUnlock()
+	if hasSettings {
+		return nil
+	}
+
+	ready := make(chan struct{}, 1)
+	var fired sync.Once
+	c.mu.Lock()
+	idx := len(c.subscribers)
+	c.subscribers = append(c.subscribers, func(evt any) {
+		if _, ok := evt.(*gmproto.Settings); ok {
+			fired.Do(func() { close(ready) })
+		}
+	})
+	if c.settings != nil {
+		fired.Do(func() { close(ready) })
+	}
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if idx < len(c.subscribers) {
+			c.subscribers = append(c.subscribers[:idx], c.subscribers[idx+1:]...)
+		}
+		c.mu.Unlock()
+	}()
+
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *Client) simForParticipant(participantID string) *gmproto.SIMCard {
+	c.mu.RLock()
+	settings := c.settings
+	c.mu.RUnlock()
+	if settings == nil {
+		return nil
+	}
+	for _, sim := range settings.GetSIMCards() {
+		if sim.GetSIMParticipant().GetID() == participantID {
+			return sim
+		}
+	}
+	return nil
+}
+
+func (c *Client) watchMessageEcho(tmpID string) (func(context.Context) (*libgm.WrappedMessage, error), func()) {
+	echo := make(chan *libgm.WrappedMessage, 1)
+	c.mu.Lock()
+	idx := len(c.subscribers)
+	c.subscribers = append(c.subscribers, func(evt any) {
+		w, ok := evt.(*libgm.WrappedMessage)
+		if !ok || w.Message.GetTmpID() != tmpID {
+			return
+		}
+		select {
+		case echo <- w:
+		default:
+		}
+	})
+	c.mu.Unlock()
+
+	unsubscribe := func() {
+		c.mu.Lock()
+		if idx < len(c.subscribers) {
+			c.subscribers = append(c.subscribers[:idx], c.subscribers[idx+1:]...)
+		}
+		c.mu.Unlock()
+	}
+	wait := func(ctx context.Context) (*libgm.WrappedMessage, error) {
+		select {
+		case w := <-echo:
+			return w, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return wait, unsubscribe
+}
+
+func sendStatusMessage(resp *gmproto.SendMessageResponse) string {
+	switch resp.GetStatus() {
+	case gmproto.SendMessageResponse_UNKNOWN:
+		if resp.GetGoogleAccountSwitch() != nil {
+			return "switch back to QR pairing or log in with Google account to send messages"
+		}
+		return "unknown status"
+	case gmproto.SendMessageResponse_FAILURE_2:
+		return "unknown permanent error"
+	case gmproto.SendMessageResponse_FAILURE_3:
+		return "unknown temporary error"
+	case gmproto.SendMessageResponse_FAILURE_4:
+		return "Google Messages is not your default SMS app"
+	default:
+		return resp.GetStatus().String()
+	}
 }
 
 // ReactionAction selects ADD / REMOVE / SWITCH semantics on SendReaction.
@@ -263,11 +409,15 @@ func (c *Client) AuthSnapshot() (*libgm.AuthData, error) {
 // dispatch is the single libgm callback. It persists on token refresh and
 // then fans out to subscribers.
 func (c *Client) dispatch(evt any) {
-	switch evt.(type) {
+	switch e := evt.(type) {
 	case *events.AuthTokenRefreshed, *events.PairSuccessful:
 		if err := saveAuth(c.layout.Session, c.auth); err != nil {
 			c.logger.Error().Err(err).Msg("Failed to persist refreshed auth data")
 		}
+	case *gmproto.Settings:
+		c.mu.Lock()
+		c.settings = e
+		c.mu.Unlock()
 	}
 	c.mu.RLock()
 	subs := append([]EventHandler(nil), c.subscribers...)

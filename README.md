@@ -108,6 +108,8 @@ gmcli history backfill --chat <conv-id> --requests 10 --count 50
 gmcli --read-only=false send text --to <conv-id> --message "on my way"
 gmcli --read-only=false send react --message <msg-id> --emoji "👍"
 gmcli media download --message <msg-id>
+# `send text` only reports success after Google Messages echoes the outgoing
+# message back with its canonical message_id.
 
 # Every command supports --json for machine-readable output and --full to
 # disable truncation in tables.

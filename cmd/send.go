@@ -45,40 +45,22 @@ func sendTextCmd() *cobra.Command {
 			if err := requireWritable(); err != nil {
 				return err
 			}
-			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, st *store.Store) error {
-				res, err := c.SendText(to, message, replyTo)
+			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, _ *store.Store) error {
+				res, err := c.SendText(ctx, to, message, replyTo)
 				if err != nil {
 					return err
 				}
-
-				// Upsert the sent message immediately so query commands see
-				// it without waiting for the echo. The sync pump will
-				// reconcile when the canonical message_id arrives.
-				body := message
-				now := time.Now().UnixMilli()
-				_ = st.UpsertConversation(ctx, store.Conversation{
-					ID:                res.ConversationID,
-					SourcePlatform:    "gm",
-					LastMessageTimeMS: now,
-				})
-				_ = st.UpsertMessage(ctx, store.Message{
-					ID:             res.MessageID,
-					ConversationID: res.ConversationID,
-					SourcePlatform: "gm",
-					SenderID:       "me",
-					Body:           &body,
-					TimestampMS:    now,
-					IsFromMe:       true,
-				})
 
 				if flags.jsonOut {
 					return output.JSON(os.Stdout, map[string]any{
 						"sent":            true,
 						"conversation_id": res.ConversationID,
+						"message_id":      res.MessageID,
 						"tmp_id":          res.TmpID,
 					})
 				}
-				fmt.Fprintf(os.Stderr, "Sent to %s (tmp_id %s)\n", res.ConversationID, res.TmpID)
+				fmt.Fprintf(os.Stderr, "Sent to %s (message_id %s, tmp_id %s)\n",
+					res.ConversationID, res.MessageID, res.TmpID)
 				return nil
 			})
 		},
