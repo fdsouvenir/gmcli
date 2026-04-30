@@ -95,6 +95,18 @@ func (s *Store) CountMessages(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountMessagesForConversation returns the total number of stored messages in
+// one conversation.
+func (s *Store) CountMessagesForConversation(ctx context.Context, conversationID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM messages
+		 WHERE conversation_id = ?
+	`, conversationID).Scan(&n)
+	return n, err
+}
+
 // ListMessageOpts describes a message-list query. Times are inclusive.
 type ListMessageOpts struct {
 	ConversationID string    // optional; if empty, all conversations

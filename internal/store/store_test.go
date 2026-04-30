@@ -95,18 +95,26 @@ func TestUpsertMessageAndFTSRoundTrip(t *testing.T) {
 		ID: "m2", ConversationID: "conv-1", Body: &body2,
 		TimestampMS: time.Now().UnixMilli() + 1, IsFromMe: true,
 	}))
+	must(st.UpsertMessage(ctx, store.Message{
+		ID: "m3", ConversationID: "conv-2", Body: &body2,
+		TimestampMS: time.Now().UnixMilli() + 2,
+	}))
+
+	if n, err := st.CountMessagesForConversation(ctx, "conv-1"); err != nil || n != 2 {
+		t.Fatalf("count conv-1: got %d err=%v, want 2", n, err)
+	}
+	if n, err := st.CountMessagesForConversation(ctx, "conv-2"); err != nil || n != 1 {
+		t.Fatalf("count conv-2: got %d err=%v, want 1", n, err)
+	}
 
 	hits, err := st.SearchMessages(ctx, "dinner", 10)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(hits) != 2 {
-		t.Fatalf("expected 2 hits, got %d", len(hits))
+	if len(hits) != 3 {
+		t.Fatalf("expected 3 hits, got %d", len(hits))
 	}
 	for _, h := range hits {
-		if h.ConversationID != "conv-1" {
-			t.Errorf("wrong conv on hit %s: %s", h.MessageID, h.ConversationID)
-		}
 		if h.Snippet == "" {
 			t.Errorf("empty snippet on hit %s", h.MessageID)
 		}
@@ -118,7 +126,7 @@ func TestUpsertMessageAndFTSRoundTrip(t *testing.T) {
 		TimestampMS: time.Now().UnixMilli(),
 	}))
 	hits, _ = st.SearchMessages(ctx, "dinner", 10)
-	if len(hits) != 2 {
+	if len(hits) != 3 {
 		t.Fatalf("FTS duplicated rows on re-upsert: %d hits", len(hits))
 	}
 }

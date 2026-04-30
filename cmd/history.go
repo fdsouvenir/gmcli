@@ -15,10 +15,14 @@ import (
 )
 
 type historyBackfillResult struct {
-	ConversationID string `json:"conversation_id"`
-	Requests       int    `json:"requests"`
-	Count          int64  `json:"count"`
-	Imported       int    `json:"imported"`
+	ConversationID       string `json:"conversation_id"`
+	Requests             int    `json:"requests"`
+	Count                int64  `json:"count"`
+	FetchedMessages      int    `json:"fetched_messages"`
+	SyncRecordsProcessed int    `json:"sync_records_processed"`
+	MessagesBefore       int    `json:"messages_before"`
+	MessagesAfter        int    `json:"messages_after"`
+	MessagesAddedForChat int    `json:"messages_added_for_chat"`
 }
 
 func historyCmd() *cobra.Command {
@@ -40,6 +44,10 @@ func historyBackfillCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "backfill",
 		Short: "Fetch older messages for one conversation",
+		Long: "Fetch older messages for one conversation. --requests limits how many " +
+			"FetchMessages calls gmcli makes, and --count limits how many message " +
+			"records each call asks the phone for. JSON output separates protocol " +
+			"records processed from messages added to the target conversation.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if chat == "" {
 				return fmt.Errorf("--chat is required")
@@ -57,14 +65,14 @@ func historyBackfillCmd() *cobra.Command {
 			if flags.jsonOut {
 				return output.JSON(os.Stdout, res)
 			}
-			fmt.Fprintf(os.Stderr, "Backfilled %d message(s) for %s using %d request(s)\n",
-				res.Imported, res.ConversationID, res.Requests)
+			fmt.Fprintf(os.Stderr, "Backfill for %s: fetched %d message record(s), chat messages %d -> %d (+%d), using %d request(s)\n",
+				res.ConversationID, res.FetchedMessages, res.MessagesBefore, res.MessagesAfter, res.MessagesAddedForChat, res.Requests)
 			return nil
 		},
 	}
 	c.Flags().StringVar(&chat, "chat", "", "conversation_id to backfill")
-	c.Flags().IntVar(&requests, "requests", 10, "max history requests to make")
-	c.Flags().Int64Var(&count, "count", 50, "messages to request per round")
+	c.Flags().IntVar(&requests, "requests", 10, "max FetchMessages calls to make for the target conversation")
+	c.Flags().Int64Var(&count, "count", 50, "max message records to request per FetchMessages call")
 	return c
 }
 
@@ -110,7 +118,12 @@ func runHistoryBackfill(chat string, requests int, count int64) (historyBackfill
 		return historyBackfillResult{}, err
 	}
 
-	res := historyBackfillResult{ConversationID: chat, Count: count}
+	before, err := st.CountMessagesForConversation(ctx, chat)
+	if err != nil {
+		return historyBackfillResult{}, fmt.Errorf("count messages before backfill: %w", err)
+	}
+
+	res := historyBackfillResult{ConversationID: chat, Count: count, MessagesBefore: before}
 	for i := 0; i < requests; i++ {
 		resp, err := client.Underlying().FetchMessages(chat, count, cursor)
 		if err != nil {
@@ -118,13 +131,21 @@ func runHistoryBackfill(chat string, requests int, count int64) (historyBackfill
 		}
 		res.Requests++
 		msgs := resp.GetMessages()
-		res.Imported += pump.ImportMessages(ctx, msgs)
+		res.FetchedMessages += len(msgs)
+		imported := pump.ImportMessages(ctx, msgs)
+		res.SyncRecordsProcessed += imported
 		next := resp.GetCursor()
 		if len(msgs) == 0 || sameCursor(cursor, next) {
 			break
 		}
 		cursor = next
 	}
+	after, err := st.CountMessagesForConversation(ctx, chat)
+	if err != nil {
+		return res, fmt.Errorf("count messages after backfill: %w", err)
+	}
+	res.MessagesAfter = after
+	res.MessagesAddedForChat = after - before
 	return res, nil
 }
 

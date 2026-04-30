@@ -93,6 +93,9 @@ gmcli contacts alias rm --id <pid>
 
 # 5. Best-effort history backfill, modeled after wacli.
 gmcli history backfill --chat <conv-id> --requests 10 --count 50
+# JSON output reports protocol records separately from the chat message delta:
+# fetched_messages, sync_records_processed, messages_before, messages_after,
+# messages_added_for_chat.
 
 # 6. Write to the phone (always requires --read-only=false).
 gmcli --read-only=false send text --to <conv-id> --message "on my way"
