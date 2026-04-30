@@ -1,0 +1,4 @@
+interface:
+  display_name: "Google Messages"
+  short_description: "Query local Google Messages history"
+  default_prompt: "Use $google-messages to check my recent texts and summarize anything important."

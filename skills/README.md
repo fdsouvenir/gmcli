@@ -2,8 +2,8 @@
 
 LLM skills that wrap gmcli for assistants like Claude Code, OpenClaw, or any
 SKILL.md-aware harness. Each skill is a directory containing a `SKILL.md`
-whose YAML frontmatter declares the trigger language; the markdown body is
-the playbook the assistant follows when the skill fires.
+whose YAML frontmatter declares the trigger language; optional `agents/`
+metadata provides UI labels for harnesses that support it.
 
 ## google-messages
 
@@ -28,8 +28,9 @@ The exact install path depends on your harness:
       ln -s "$(pwd)/skills/google-messages" ~/.claude/skills/google-messages
 
 - **OpenClaw** — drop the directory into your OpenClaw skills root and
-  reload the agent. The frontmatter `name` (`google-messages`) is what
-  shows up in the skill list.
+  reload the agent. The frontmatter `name` (`google-messages`) identifies
+  the skill; `agents/openai.yaml` provides the human-facing label where
+  supported.
 
 In all cases, the assistant must be able to run `gmcli` from its `Bash`
 tool. Verify with:
