@@ -47,6 +47,13 @@ func (s *Store) UpsertMessage(ctx context.Context, m Message) error {
 		platform = "gm"
 	}
 	now := time.Now().UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO conversations (
+			conversation_id, source_platform, updated_at
+		) VALUES (?, ?, ?)
+	`, m.ConversationID, platform, now); err != nil {
+		return fmt.Errorf("ensure conversation %s: %w", m.ConversationID, err)
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO messages (
 			message_id, conversation_id, source_platform, sender_id,
@@ -145,7 +152,7 @@ func (s *Store) ListMessages(ctx context.Context, opts ListMessageOpts) ([]Messa
 		return nil, fmt.Errorf("list messages: %w", err)
 	}
 	defer rows.Close()
-	var out []Message
+	out := make([]Message, 0)
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {
@@ -317,7 +324,7 @@ func (s *Store) SearchMessages(ctx context.Context, query string, limit int) ([]
 		return nil, fmt.Errorf("fts search %q: %w", query, err)
 	}
 	defer rows.Close()
-	var out []SearchHit
+	out := make([]SearchHit, 0)
 	for rows.Next() {
 		var h SearchHit
 		var fromMe int64

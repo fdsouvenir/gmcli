@@ -106,7 +106,7 @@ func (s *Store) SearchContacts(ctx context.Context, query string, limit int) ([]
 		return nil, fmt.Errorf("search contacts: %w", err)
 	}
 	defer rows.Close()
-	var out []Contact
+	out := make([]Contact, 0)
 	for rows.Next() {
 		c, err := scanContactWithAlias(rows)
 		if err != nil {

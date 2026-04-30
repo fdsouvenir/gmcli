@@ -46,9 +46,6 @@ func sendTextCmd() *cobra.Command {
 				return err
 			}
 			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, st *store.Store) error {
-				if err := c.WaitForReady(ctx); err != nil {
-					return fmt.Errorf("wait for ready: %w", err)
-				}
 				res, err := c.SendText(to, message, replyTo)
 				if err != nil {
 					return err
@@ -59,6 +56,11 @@ func sendTextCmd() *cobra.Command {
 				// reconcile when the canonical message_id arrives.
 				body := message
 				now := time.Now().UnixMilli()
+				_ = st.UpsertConversation(ctx, store.Conversation{
+					ID:                res.ConversationID,
+					SourcePlatform:    "gm",
+					LastMessageTimeMS: now,
+				})
 				_ = st.UpsertMessage(ctx, store.Message{
 					ID:             res.MessageID,
 					ConversationID: res.ConversationID,
@@ -111,9 +113,6 @@ func sendReactCmd() *cobra.Command {
 				action = gm.ReactionSwitch
 			}
 			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, _ *store.Store) error {
-				if err := c.WaitForReady(ctx); err != nil {
-					return fmt.Errorf("wait for ready: %w", err)
-				}
 				if err := c.SendReaction(msgID, emoji, action); err != nil {
 					return err
 				}
@@ -166,10 +165,23 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	pump := gmsync.New(st, logger)
 	client.Subscribe(pump.Handle)
 
+	ready := make(chan error, 1)
+	go func() { ready <- client.WaitForReady(ctx) }()
+
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
+
+	select {
+	case err := <-ready:
+		if err != nil {
+			return fmt.Errorf("wait for ready: %w", err)
+		}
+	default:
+		// Some libgm paths return from Connect after the ready event has
+		// already fired. In that case the session is usable.
+	}
 
 	return fn(ctx, client, st)
 }

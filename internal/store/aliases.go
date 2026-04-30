@@ -91,7 +91,7 @@ func (s *Store) ListAliases(ctx context.Context) ([]Alias, error) {
 		return nil, fmt.Errorf("list aliases: %w", err)
 	}
 	defer rows.Close()
-	var out []Alias
+	out := make([]Alias, 0)
 	for rows.Next() {
 		var a Alias
 		var typ string

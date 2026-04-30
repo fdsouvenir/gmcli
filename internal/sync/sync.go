@@ -150,7 +150,7 @@ func (p *Pump) onConversation(ctx context.Context, c *gmproto.Conversation) {
 		Name:              c.GetName(),
 		IsGroup:           c.GetIsGroupChat(),
 		ParticipantsJSON:  participantsJSON(c.GetParticipants()),
-		LastMessageTimeMS: c.GetLastMessageTimestamp(),
+		LastMessageTimeMS: normalizeTimestampMS(c.GetLastMessageTimestamp()),
 		Unread:            c.GetUnread(),
 		Pinned:            c.GetPinned(),
 	}
@@ -203,7 +203,7 @@ func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
 		ConversationID: m.GetConversationID(),
 		SourcePlatform: p.platform,
 		SenderID:       m.GetParticipantID(),
-		TimestampMS:    m.GetTimestamp(),
+		TimestampMS:    normalizeTimestampMS(m.GetTimestamp()),
 		Status:         int64(m.GetMessageStatus().GetStatus()),
 		IsFromMe:       isFromMe(m),
 		ReactionsJSON:  reactionsJSON(m.GetReactions()),
@@ -344,4 +344,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeTimestampMS(ts int64) int64 {
+	// libgm/gmproto timestamps have appeared as both millis and micros across
+	// event types. Current Unix milliseconds are ~1e12; microseconds are ~1e15.
+	if ts > 100_000_000_000_000 {
+		return ts / 1000
+	}
+	return ts
 }

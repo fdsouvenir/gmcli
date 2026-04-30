@@ -109,7 +109,7 @@ func (s *Store) ListConversations(ctx context.Context, opts ListConversationOpts
 		return nil, fmt.Errorf("list conversations: %w", err)
 	}
 	defer rows.Close()
-	var out []Conversation
+	out := make([]Conversation, 0)
 	for rows.Next() {
 		c, err := scanConversation(rows)
 		if err != nil {

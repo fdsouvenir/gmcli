@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/store"
@@ -56,6 +57,25 @@ func syncCmd() *cobra.Command {
 			} else {
 				imported := pump.ImportContacts(ctx, resp.GetContacts())
 				logger.Info().Int("contacts", imported).Msg("Imported contacts")
+			}
+
+			if resp, err := client.Underlying().ListConversations(50, gmproto.ListConversationsRequest_INBOX); err != nil {
+				logger.Warn().Err(err).Msg("Conversation import failed")
+			} else {
+				convs, msgs := 0, 0
+				for _, conv := range resp.GetConversations() {
+					if conv == nil || conv.GetConversationID() == "" {
+						continue
+					}
+					pump.Handle(conv)
+					convs++
+					if history, err := client.Underlying().FetchMessages(conv.GetConversationID(), 10, nil); err != nil {
+						logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
+					} else {
+						msgs += pump.ImportMessages(ctx, history.GetMessages())
+					}
+				}
+				logger.Info().Int("conversations", convs).Int("messages", msgs).Msg("Imported recent conversation history")
 			}
 
 			if !follow {
