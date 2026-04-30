@@ -15,23 +15,23 @@ var ErrNotFound = errors.New("not found")
 
 // Message is the storage shape for a single message. Body is the plaintext
 // content if any (nil for media-only). MediaID/MimeType/DecryptionKey
-// describe the attachment if present; the bytes themselves are not stored
-// here — Phase 3 will add an explicit `media download` command.
+// describe the attachment if present; the bytes themselves are only fetched
+// by the explicit `media download` command.
 type Message struct {
-	ID             string
-	ConversationID string
-	SourcePlatform string
-	SenderID       string
-	Body           *string
-	TimestampMS    int64
-	Status         int64
-	IsFromMe       bool
-	MediaID        *string
-	MimeType       *string
-	DecryptionKey  []byte
-	ReactionsJSON  *string
-	ReplyToID      *string
-	RawProto       []byte
+	ID             string  `json:"message_id"`
+	ConversationID string  `json:"conversation_id"`
+	SourcePlatform string  `json:"source_platform"`
+	SenderID       string  `json:"sender_id"`
+	Body           *string `json:"body,omitempty"`
+	TimestampMS    int64   `json:"timestamp_ms"`
+	Status         int64   `json:"status"`
+	IsFromMe       bool    `json:"is_from_me"`
+	MediaID        *string `json:"media_id,omitempty"`
+	MimeType       *string `json:"mime_type,omitempty"`
+	DecryptionKey  []byte  `json:"-"`
+	ReactionsJSON  *string `json:"reactions_json,omitempty"`
+	ReplyToID      *string `json:"reply_to_id,omitempty"`
+	RawProto       []byte  `json:"-"`
 }
 
 // UpsertMessage inserts or updates a message row by ID.
@@ -287,12 +287,12 @@ func scanMessage(r interface {
 // SearchHit is one FTS result. Snippet is the FTS5-generated highlighted
 // excerpt around the match, suitable for display in --json output.
 type SearchHit struct {
-	MessageID      string
-	ConversationID string
-	Body           string
-	Snippet        string
-	TimestampMS    int64
-	IsFromMe       bool
+	MessageID      string `json:"message_id"`
+	ConversationID string `json:"conversation_id"`
+	Body           string `json:"body"`
+	Snippet        string `json:"snippet"`
+	TimestampMS    int64  `json:"timestamp_ms"`
+	IsFromMe       bool   `json:"is_from_me"`
 }
 
 // SearchMessages runs an FTS5 MATCH against messages_fts. limit caps the

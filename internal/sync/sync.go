@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -26,11 +27,19 @@ type Pump struct {
 	store    *store.Store
 	logger   zerolog.Logger
 	platform string
+	fatal    chan error
 }
 
 // New constructs a Pump that writes into st.
 func New(st *store.Store, logger zerolog.Logger) *Pump {
-	return &Pump{store: st, logger: logger, platform: "gm"}
+	return &Pump{store: st, logger: logger, platform: "gm", fatal: make(chan error, 1)}
+}
+
+// Fatal returns a channel that receives terminal connection/auth errors.
+// Long-running commands should select on this and exit non-zero so supervisors
+// can restart or alert instead of silently idling after libgm gives up.
+func (p *Pump) Fatal() <-chan error {
+	return p.fatal
 }
 
 // Handle is the entry point registered with gm.Client.Subscribe. It must
@@ -51,9 +60,13 @@ func (p *Pump) Handle(evt any) {
 	case *events.PhoneRespondingAgain:
 		p.logger.Info().Msg("Phone responding again")
 	case *events.GaiaLoggedOut:
-		p.logger.Error().Msg("Phone reports logged-out state — re-run `gmcli auth`")
+		err := fmt.Errorf("phone reports logged-out state; re-run `gmcli auth`")
+		p.logger.Error().Err(err).Msg("libgm auth fatal error")
+		p.fail(err)
 	case *events.ListenFatalError:
+		err := fmt.Errorf("libgm listen fatal error: %w", e.Error)
 		p.logger.Error().Err(e.Error).Msg("libgm listen fatal error")
+		p.fail(err)
 	case *events.ListenTemporaryError:
 		p.logger.Warn().Err(e.Error).Msg("libgm listen temporary error")
 	case *events.ListenRecovered:
@@ -64,6 +77,53 @@ func (p *Pump) Handle(evt any) {
 	default:
 		p.logger.Trace().Type("event", evt).Msg("Unhandled libgm event")
 	}
+}
+
+func (p *Pump) fail(err error) {
+	select {
+	case p.fatal <- err:
+	default:
+	}
+}
+
+// ImportContacts persists a full contact-list response from libgm.
+func (p *Pump) ImportContacts(ctx context.Context, contacts []*gmproto.Contact) int {
+	imported := 0
+	for _, c := range contacts {
+		if c == nil || c.GetParticipantID() == "" {
+			continue
+		}
+		num := c.GetNumber()
+		row := store.Contact{
+			ParticipantID:   c.GetParticipantID(),
+			SourcePlatform:  p.platform,
+			ContactID:       c.GetContactID(),
+			Name:            c.GetName(),
+			E164:            firstNonEmpty(num.GetNumber(), num.GetNumber2()),
+			FormattedNumber: num.GetFormattedNumber(),
+			AvatarColor:     c.GetAvatarHexColor(),
+		}
+		if err := p.store.UpsertContact(ctx, row); err != nil {
+			p.logger.Error().Err(err).Str("participant_id", row.ParticipantID).Msg("Upsert contact failed")
+			continue
+		}
+		imported++
+	}
+	return imported
+}
+
+// ImportMessages persists message-history rows fetched on demand. These are
+// marked old so they don't advance the live-event freshness timestamp.
+func (p *Pump) ImportMessages(ctx context.Context, messages []*gmproto.Message) int {
+	imported := 0
+	for _, m := range messages {
+		if m == nil || m.GetMessageID() == "" {
+			continue
+		}
+		p.onMessage(ctx, &libgm.WrappedMessage{Message: m, IsOld: true})
+		imported++
+	}
+	return imported
 }
 
 func (p *Pump) onClientReady(ctx context.Context, e *events.ClientReady) {
@@ -222,8 +282,8 @@ func reactionsJSON(reactions []*gmproto.ReactionEntry) *string {
 			continue
 		}
 		out = append(out, map[string]any{
-			"emoji":         r.GetData().GetUnicode(),
-			"participants":  r.GetParticipantIDs(),
+			"emoji":        r.GetData().GetUnicode(),
+			"participants": r.GetParticipantIDs(),
 		})
 	}
 	if len(out) == 0 {
@@ -275,4 +335,13 @@ func participantsJSON(parts []*gmproto.Participant) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

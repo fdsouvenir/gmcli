@@ -47,9 +47,6 @@ func contactsAliasSetCmd() *cobra.Command {
 			if id == "" || alias == "" {
 				return fmt.Errorf("--id and --alias are required")
 			}
-			if err := requireWritable(); err != nil {
-				return err
-			}
 			st, err := openStore()
 			if err != nil {
 				return err
@@ -79,9 +76,6 @@ func contactsAliasRmCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
 				return fmt.Errorf("--id is required")
-			}
-			if err := requireWritable(); err != nil {
-				return err
 			}
 			st, err := openStore()
 			if err != nil {

@@ -7,7 +7,7 @@ description: Use this skill when the user asks about their text messages — phr
 
 Answer questions about the user's text messages by querying a local SQLite
 archive populated from their Google Messages account. The archive lives at
-`$XDG_DATA_HOME/gmcli` (typically `~/.local/share/gmcli`) and is queried
+`$XDG_STATE_HOME/gmcli` (typically `~/.local/state/gmcli`) and is queried
 through the `gmcli` CLI. The skill is read-only.
 
 ## When to use
@@ -30,11 +30,10 @@ through the `gmcli` CLI. The skill is read-only.
 - Pairing or syncing the archive ("connect my phone", "sync messages"). Tell
   the user to run `gmcli auth` (one-time pairing) or `gmcli sync --follow`
   themselves; do not run those yourself.
-- Setting aliases or labels ("call her Mom from now on"). The
-  `contacts alias` verbs require `--read-only=false`; do not run them. Tell
-  the user the exact command to run themselves.
-- Downloading media (`media download` requires `--read-only=false`). If the
-  user wants to see an attachment, give them the exact command to run.
+- Setting aliases or labels ("call her Mom from now on"). Do not run them
+  from this skill. Tell the user the exact command to run themselves.
+- Downloading media. If the user wants to see an attachment, give them the
+  exact `gmcli media download --message <message_id>` command to run.
 
 ## Tools
 
@@ -53,8 +52,8 @@ archive when a focused query will do.
    gmcli --json --read-only contacts search "<name fragment>"
    ```
 
-   Returns up to 50 contacts matching the substring across name, alias,
-   e164, and formatted_number. Each row carries both `name` (Google's
+   Returns up to 50 contacts matching the substring across `name`, `alias`,
+   `e164`, and `formatted_number`. Each row carries both `name` (Google's
    contact name) and `display_name` (the local alias if one is set,
    otherwise `name`). Always present `display_name` to the user; mention
    `name` only if disambiguation requires it. If multiple match and none
@@ -82,7 +81,7 @@ archive when a focused query will do.
    gmcli --json --read-only messages search "<query>" --limit 100
    ```
 
-   Each hit has a `Snippet` field with the match wrapped in `[...]` brackets.
+   Each hit has a `snippet` field with the match wrapped in `[...]` brackets.
 
 5. **Pull surrounding context for a search hit.**
 

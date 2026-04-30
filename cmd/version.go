@@ -19,12 +19,12 @@ const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +
 	"See LICENSE and NOTICE in the source tree for full text."
 
 type versionInfo struct {
-	Version  string `json:"version"`
-	Commit   string `json:"commit,omitempty"`
-	Built    string `json:"built,omitempty"`
-	GoVer    string `json:"go_version"`
-	License  string `json:"license"`
-	Notice   string `json:"notice"`
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Built   string `json:"built,omitempty"`
+	GoVer   string `json:"go_version"`
+	License string `json:"license"`
+	Notice  string `json:"notice"`
 }
 
 func versionCmd() *cobra.Command {

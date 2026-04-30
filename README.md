@@ -4,9 +4,11 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** Feature-complete (Phases 1–4). Pairing, session persistence,
-> sync loop, query CLI (`messages`, `contacts`, `chats`), and an LLM skill
-> (`skills/google-messages`) are all wired up. See
+> **Status:** v0.1.0-alpha. Pairing, session persistence, sync loop, query
+> CLI (`messages`, `contacts`, `chats`), best-effort history backfill, send
+> commands, media download, and an LLM skill (`skills/google-messages`) are
+> wired up. The automated test suite passes, but the current release should
+> be treated as alpha until it has broader live-device testing. See
 > [`docs/research/phase-1-libgmessages.md`](docs/research/phase-1-libgmessages.md)
 > for the design notes that motivated this layout, and
 > [`skills/README.md`](skills/README.md) for the skill installation guide.
@@ -15,8 +17,8 @@ shell use and LLM tool integrations.
 
 - **Standalone.** No Matrix server, no Docker, no bridge daemon. Just a Go
   binary, a SQLite file, and a phone running Google Messages.
-- **Read-first.** Mutating operations (sending, deleting, reacting) are gated
-  behind explicit flags. The default is to observe, not to act.
+- **Read-first.** Phone-mutating operations (sending texts and reactions) are
+  gated behind explicit flags. The default is to observe, not to send.
 - **Local.** Messages live in a single SQLite database under your data
   directory (XDG-compliant). Nothing is uploaded anywhere.
 - **AGPL-3.0.** gmcli imports `pkg/libgm` from
@@ -50,6 +52,19 @@ go build -o gmcli ./...
 A pre-built binary distribution and Homebrew formula will land alongside the
 v0.1 release.
 
+## Alpha limits
+
+- Live-device coverage is still limited. Before relying on gmcli unattended,
+  test `auth`, `sync`, query commands, `history backfill`, `media download`,
+  and a deliberate send with your own Google Messages account.
+- History backfill is best-effort and depends on what Google Messages returns
+  through the paired phone.
+- The phone must be online for sync, backfill, sends, and media downloads.
+- The SQLite database is local but unencrypted. Use filesystem encryption if
+  you need at-rest protection.
+- The protocol depends on the unofficial `libgm` reverse-engineered Google
+  Messages web protocol and can break if Google changes that protocol.
+
 ## Quick start
 
 ```sh
@@ -71,15 +86,18 @@ gmcli messages context <message-id>           # surrounding messages
 gmcli contacts search alice                   # name/number/alias substring match
 gmcli contacts show <participant-id-or-num>   # contact detail
 
-# 4. Local-only labels (also requires --read-only=false).
-gmcli --read-only=false contacts alias set --id <pid> --alias "Mom"
+# 4. Local-only labels.
+gmcli contacts alias set --id <pid> --alias "Mom"
 gmcli contacts alias list                     # list all set aliases
-gmcli --read-only=false contacts alias rm --id <pid>
+gmcli contacts alias rm --id <pid>
 
-# 5. Write to the phone (always requires --read-only=false).
+# 5. Best-effort history backfill, modeled after wacli.
+gmcli history backfill --chat <conv-id> --requests 10 --count 50
+
+# 6. Write to the phone (always requires --read-only=false).
 gmcli --read-only=false send text --to <conv-id> --message "on my way"
 gmcli --read-only=false send react --message <msg-id> --emoji "👍"
-gmcli --read-only=false media download --message <msg-id>
+gmcli media download --message <msg-id>
 
 # Every command supports --json for machine-readable output and --full to
 # disable truncation in tables.
@@ -91,7 +109,7 @@ gmcli --json chats list | jq '.[0].name'
 | Flag             | Default                            | Purpose                                                  |
 | ---------------- | ---------------------------------- | -------------------------------------------------------- |
 | `--store DIR`    | `$XDG_STATE_HOME/gmcli`            | Where session, SQLite, and downloaded media live.        |
-| `--read-only`    | `true`                             | Block any command that would mutate the phone or store. |
+| `--read-only`    | `true`                             | Block commands that send texts or reactions through the phone. |
 | `--json`         | `false`                            | Emit machine-readable output.                            |
 | `--full`         | `false`                            | Disable truncation in tabular output.                    |
 | `--log-level`    | `info`                             | Verbosity (`trace`/`debug`/`info`/`warn`).               |
@@ -128,10 +146,10 @@ instructions.
 ## Privacy
 
 - All data is local. gmcli does not phone home.
-- Session tokens are stored in `$XDG_DATA_HOME/gmcli/session.json` with mode
+- Session tokens are stored in `$XDG_STATE_HOME/gmcli/session.json` with mode
   0600.
 - Media attachments are referenced by ID in the database; bytes are not
-  downloaded by default. Phase 3 will add `gmcli media download <message-id>`
+  downloaded by default. Use `gmcli media download --message <message-id>`
   for explicit downloads.
 - The SQLite file is unencrypted. If you need at-rest encryption, layer your
   own filesystem encryption (FileVault, LUKS, etc.).

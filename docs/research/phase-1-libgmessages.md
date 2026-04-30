@@ -117,7 +117,7 @@ func saveSession() {
 
 All proto fields on AuthData are `json:"...,omitempty"` tagged, so this works
 out of the box. gmcli should follow the same pattern, gated on the
-`--store DIR` flag (default `$XDG_DATA_HOME/gmcli`).
+`--store DIR` flag (default `$XDG_STATE_HOME/gmcli`).
 
 ## 3. Bridge entanglement check
 

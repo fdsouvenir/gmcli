@@ -17,14 +17,14 @@ import (
 // DisplayName is Alias if non-empty, otherwise Name — render code should
 // always read DisplayName, never Name directly.
 type Contact struct {
-	ParticipantID   string
-	SourcePlatform  string
-	ContactID       string
-	Name            string
-	E164            string
-	FormattedNumber string
-	AvatarColor     string
-	IsMe            bool
+	ParticipantID   string `json:"participant_id"`
+	SourcePlatform  string `json:"source_platform"`
+	ContactID       string `json:"contact_id"`
+	Name            string `json:"name"`
+	E164            string `json:"e164"`
+	FormattedNumber string `json:"formatted_number"`
+	AvatarColor     string `json:"avatar_color"`
+	IsMe            bool   `json:"is_me"`
 	Alias           string `json:"alias,omitempty"`
 	DisplayName     string `json:"display_name,omitempty"`
 }
@@ -173,4 +173,3 @@ func scanContactWithAlias(r interface {
 	}
 	return c, nil
 }
-

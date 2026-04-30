@@ -33,7 +33,6 @@ unified-contact mapping) inspired by openmessage
 (https://github.com/MaxGhenis/openmessage), released into the public domain
 by Max Ghenis under the Unlicense.
 
-For all other Go module dependencies and their licenses, see go.sum and
-the third_party/ directory in the source tree, or run:
+For all other Go module dependencies and their licenses, see go.sum or run:
 
     go mod download && go-licenses report ./...

@@ -38,7 +38,7 @@ tool. Verify with:
     gmcli doctor
 
 If the assistant runs in a sandbox, ensure `gmcli` is on the sandbox's
-`PATH` and that the sandbox can read `$XDG_DATA_HOME/gmcli` (or the
+`PATH` and that the sandbox can read `$XDG_STATE_HOME/gmcli` (or the
 directory passed via `--store`).
 
 ## Authoring more skills

@@ -90,6 +90,11 @@ func (s *Store) currentVersion(ctx context.Context) (int, error) {
 	return 0, err
 }
 
+// SchemaVersion returns the highest applied schema migration version.
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	return s.currentVersion(ctx)
+}
+
 // MarkSync updates the sync_state row. Called by the sync loop on each
 // successful event delivery so doctor can surface a "last seen" timestamp.
 func (s *Store) MarkSync(ctx context.Context, lastEventTime, connectTime time.Time) error {
@@ -142,4 +147,3 @@ func buildDSN(path string) string {
 	q.Add("_pragma", "busy_timeout(5000)")
 	return "file:" + path + "?" + q.Encode()
 }
-

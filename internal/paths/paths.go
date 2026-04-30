@@ -9,10 +9,10 @@ import (
 
 // Layout describes the canonical file layout under a single store directory.
 type Layout struct {
-	Root        string // store root
-	Session     string // session.json (libgm AuthData)
-	Database    string // gmcli.db (SQLite + FTS5)
-	MediaDir    string // media/ (downloaded attachment cache)
+	Root     string // store root
+	Session  string // session.json (libgm AuthData)
+	Database string // gmcli.db (SQLite + FTS5)
+	MediaDir string // media/ (downloaded attachment cache)
 }
 
 // Resolve returns the layout rooted at storeOverride if non-empty, otherwise

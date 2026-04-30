@@ -19,10 +19,10 @@ const (
 
 // Alias is a user-set local label overriding the libgm-supplied name.
 type Alias struct {
-	TargetType AliasTarget
-	TargetID   string
-	Alias      string
-	UpdatedAt  time.Time
+	TargetType AliasTarget `json:"target_type"`
+	TargetID   string      `json:"target_id"`
+	Alias      string      `json:"alias"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 // SetAlias upserts a local alias. Empty alias is rejected — use RemoveAlias

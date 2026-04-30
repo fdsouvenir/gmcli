@@ -51,15 +51,31 @@ func syncCmd() *cobra.Command {
 			}
 			defer client.Disconnect()
 
+			if resp, err := client.Underlying().ListContacts(); err != nil {
+				logger.Warn().Err(err).Msg("Contact import failed")
+			} else {
+				imported := pump.ImportContacts(ctx, resp.GetContacts())
+				logger.Info().Int("contacts", imported).Msg("Imported contacts")
+			}
+
 			if !follow {
+				select {
+				case err := <-pump.Fatal():
+					return err
+				default:
+				}
 				fmt.Fprintln(os.Stderr, "Initial sync complete. Pass --follow to stay connected.")
 				return nil
 			}
 
 			fmt.Fprintln(os.Stderr, "Connected. Streaming events. Ctrl-C to stop.")
-			<-ctx.Done()
-			fmt.Fprintln(os.Stderr, "Disconnecting...")
-			return nil
+			select {
+			case <-ctx.Done():
+				fmt.Fprintln(os.Stderr, "Disconnecting...")
+				return nil
+			case err := <-pump.Fatal():
+				return err
+			}
 		},
 	}
 	c.Flags().BoolVar(&follow, "follow", false, "stay connected and stream events until interrupted")

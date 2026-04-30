@@ -27,10 +27,10 @@ func messagesCmd() *cobra.Command {
 
 func messagesListCmd() *cobra.Command {
 	var (
-		convID, sender    string
+		convID, sender     string
 		sinceStr, untilStr string
-		limit             int
-		order             string
+		limit              int
+		order              string
 	)
 	c := &cobra.Command{
 		Use:   "list",

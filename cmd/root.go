@@ -29,8 +29,9 @@ type globalFlags struct {
 var flags globalFlags
 
 // requireWritable returns a non-nil error when the user has not opted into
-// write commands (--read-only=false). Mirrors wacli's gating semantics
-// modulo our inverted default.
+// phone-send commands (--read-only=false). Local store maintenance remains
+// allowed in read-only mode so sync, backfill, aliases, and media downloads
+// keep working like wacli's local archive operations.
 func requireWritable() error {
 	if flags.readOnly {
 		return errReadOnly
@@ -45,7 +46,7 @@ var errReadOnly = errReadOnlyT{}
 type errReadOnlyT struct{}
 
 func (errReadOnlyT) Error() string {
-	return "read-only mode: this command would mutate state. Re-run with --read-only=false to allow it."
+	return "read-only mode: this command sends through the phone. Re-run with --read-only=false to allow it."
 }
 
 // truncate caps a string to n runes when --full is unset; otherwise returns
@@ -69,7 +70,7 @@ func Root() *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "data directory (default: $XDG_STATE_HOME/gmcli or ~/.local/state/gmcli)")
 	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "info", "log verbosity: trace, debug, info, warn, error")
 	root.PersistentFlags().BoolVar(&flags.jsonOut, "json", false, "emit machine-readable JSON output where applicable")
-	root.PersistentFlags().BoolVar(&flags.readOnly, "read-only", true, "block any operation that would write to the phone or local store")
+	root.PersistentFlags().BoolVar(&flags.readOnly, "read-only", true, "block commands that send texts or other phone mutations")
 	root.PersistentFlags().BoolVar(&flags.full, "full", false, "disable truncation in tabular output")
 
 	root.AddCommand(authCmd())
@@ -79,6 +80,7 @@ func Root() *cobra.Command {
 	root.AddCommand(messagesCmd())
 	root.AddCommand(contactsCmd())
 	root.AddCommand(chatsCmd())
+	root.AddCommand(historyCmd())
 	root.AddCommand(sendCmd())
 	root.AddCommand(mediaCmd())
 	return root
@@ -126,4 +128,3 @@ func signalContext(parent context.Context) (context.Context, context.CancelFunc)
 	}()
 	return ctx, cancel
 }
-

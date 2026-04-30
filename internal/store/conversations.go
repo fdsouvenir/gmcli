@@ -11,16 +11,16 @@ import (
 // holds the libgm Participant array as JSON to avoid a join table at this
 // stage — Phase 3 may normalize if query patterns demand it.
 type Conversation struct {
-	ID                string
-	SourcePlatform    string
-	Name              string
-	IsGroup           bool
-	ParticipantsJSON  string
-	LastMessageTimeMS int64
-	Unread            bool
-	Pinned            bool
-	Archived          bool
-	UpdatedAt         time.Time
+	ID                string    `json:"conversation_id"`
+	SourcePlatform    string    `json:"source_platform"`
+	Name              string    `json:"name"`
+	IsGroup           bool      `json:"is_group"`
+	ParticipantsJSON  string    `json:"participants_json"`
+	LastMessageTimeMS int64     `json:"last_message_time_ms"`
+	Unread            bool      `json:"unread"`
+	Pinned            bool      `json:"pinned"`
+	Archived          bool      `json:"archived"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // UpsertConversation inserts or updates a conversation row by ID.
@@ -155,4 +155,3 @@ func nullableJSON(s string) any {
 	}
 	return s
 }
-

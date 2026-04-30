@@ -91,7 +91,9 @@ func runDoctor(ctx context.Context) doctorReport {
 	}
 	defer st.Close()
 	r.StoreOpens = true
-	r.SchemaVersion = 1 // current target; mismatch would have failed Open above
+	if v, err := st.SchemaVersion(ctx); err == nil {
+		r.SchemaVersion = v
+	}
 
 	if n, err := st.CountConversations(ctx); err == nil {
 		r.Conversations = n

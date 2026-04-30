@@ -70,6 +70,7 @@ func seedStore(t *testing.T) string {
 	must(st.UpsertMessage(ctx, store.Message{
 		ID: "m3", ConversationID: "c_alice", SenderID: "p_alice",
 		Body: body("How about 7pm at the usual place"), TimestampMS: now - 2000,
+		DecryptionKey: []byte{1, 2, 3},
 	}))
 	must(st.UpsertMessage(ctx, store.Message{
 		ID: "m4", ConversationID: "c_alice", SenderID: "p_me",
@@ -133,6 +134,9 @@ func TestChatsListHumanAndJSON(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 conversations, got %d", len(got))
 	}
+	if _, ok := got[0]["conversation_id"]; !ok {
+		t.Fatalf("json output missing snake_case conversation_id: %#v", got[0])
+	}
 }
 
 func TestChatsShowDisplaysMessages(t *testing.T) {
@@ -143,6 +147,17 @@ func TestChatsShowDisplaysMessages(t *testing.T) {
 	}
 	if !strings.Contains(out, "Alice Example") {
 		t.Fatalf("expected participant, got: %q", out)
+	}
+}
+
+func TestChatsShowLimitUsesMostRecentMessages(t *testing.T) {
+	dir := seedStore(t)
+	out := runCmd(t, dir, "chats", "show", "c_alice", "--limit", "2")
+	if strings.Contains(out, "Want to grab dinner tonight?") {
+		t.Fatalf("limit should not include oldest message: %q", out)
+	}
+	if !strings.Contains(out, "How about 7pm at the usual place") || !strings.Contains(out, "See you then") {
+		t.Fatalf("limit should include two most recent messages: %q", out)
 	}
 }
 
@@ -163,6 +178,19 @@ func TestMessagesShowAndContext(t *testing.T) {
 	out := runCmd(t, dir, "messages", "show", "m3")
 	if !strings.Contains(out, "How about 7pm at the usual place") {
 		t.Fatalf("expected body in: %q", out)
+	}
+
+	jsonOut := runCmd(t, dir, "--json", "messages", "show", "m3")
+	if strings.Contains(jsonOut, "DecryptionKey") || strings.Contains(jsonOut, "decryption_key") ||
+		strings.Contains(jsonOut, "RawProto") || strings.Contains(jsonOut, "raw_proto") {
+		t.Fatalf("json leaked internal message fields: %q", jsonOut)
+	}
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(jsonOut), &msg); err != nil {
+		t.Fatalf("json: %v\n%s", err, jsonOut)
+	}
+	if _, ok := msg["message_id"]; !ok {
+		t.Fatalf("json output missing snake_case message_id: %#v", msg)
 	}
 
 	ctx := runCmd(t, dir, "messages", "context", "m3", "--before", "1", "--after", "1")

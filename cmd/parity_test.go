@@ -31,8 +31,9 @@ func runCmdAllowError(t *testing.T, store string, args ...string) (string, error
 
 func TestReadOnlyGatesWrites(t *testing.T) {
 	dir := seedStore(t)
-	// Default --read-only=true → contacts alias set should fail.
-	_, err := runCmdAllowError(t, dir, "contacts", "alias", "set", "--id", "p_alice", "--alias", "Mom")
+	// Default --read-only=true → phone-send commands should fail before
+	// opening a session.
+	_, err := runCmdAllowError(t, dir, "send", "text", "--to", "c_alice", "--message", "hello")
 	if err == nil {
 		t.Fatal("expected read-only error, got nil")
 	}
@@ -44,7 +45,7 @@ func TestReadOnlyGatesWrites(t *testing.T) {
 func TestAliasRoundTrip(t *testing.T) {
 	dir := seedStore(t)
 	// Set the alias.
-	if _, err := runCmdAllowError(t, dir, "--read-only=false",
+	if _, err := runCmdAllowError(t, dir,
 		"contacts", "alias", "set", "--id", "p_alice", "--alias", "Mom"); err != nil {
 		t.Fatalf("set alias: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestAliasRoundTrip(t *testing.T) {
 		t.Fatalf("alias not in detail: %q", detail)
 	}
 	// Remove and verify.
-	if _, err := runCmdAllowError(t, dir, "--read-only=false",
+	if _, err := runCmdAllowError(t, dir,
 		"contacts", "alias", "rm", "--id", "p_alice"); err != nil {
 		t.Fatalf("rm alias: %v", err)
 	}
