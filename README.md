@@ -4,7 +4,7 @@ A standalone Go CLI that connects to Google Messages, archives conversations
 into a local SQLite + FTS5 database, and exposes a query surface suitable for
 shell use and LLM tool integrations.
 
-> **Status:** v0.1.0-alpha. Pairing, session persistence, sync loop, query
+> **Status:** v0.1.1-alpha. Pairing, session persistence, sync loop, query
 > CLI (`messages`, `contacts`, `chats`), best-effort history backfill, send
 > commands, media download, and an LLM skill (`skills/google-messages`) are
 > wired up. The automated test suite passes, but the current release should
