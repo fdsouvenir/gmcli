@@ -51,14 +51,16 @@ directory passed via `--store`).
 The gmcli repository is the canonical source for the ClawHub listing. Publish
 directly from `skills/google-messages`; do not publish a staged copy.
 
-From the repository root, after the matching gmcli release tag exists:
+From the repository root, after the matching gmcli release tag exists. Use the
+absolute path because ClawHub resolves relative publish paths through its
+configured skills directory:
 
 ```sh
-clawhub --no-input publish skills/google-messages \
+clawhub --no-input publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --changelog "Publish the canonical gmcli repository skill and graduate from alpha." \
   --tags latest,gmcli,google-messages,local,archive,sms,rcs,read-only
 ```
@@ -66,14 +68,14 @@ clawhub --no-input publish skills/google-messages \
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.2.0 --files
+clawhub inspect google-messages-local-archive --version 0.2.1 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.0
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.1
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```

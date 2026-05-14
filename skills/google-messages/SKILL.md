@@ -1,7 +1,7 @@
 ---
 name: google-messages-local-archive
 description: Give your OpenClaw assistant safe, read-only access to your Google Messages history through a private local archive. Ask natural questions like "what did Alex text me?", "did anyone mention the flight?", or "summarize my recent texts" while keeping your SMS/RCS data on your machine.
-version: 0.2.0
+version: 0.2.1
 homepage: https://github.com/fdsouvenir/gmcli
 metadata:
   openclaw:
@@ -10,7 +10,7 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v0.2.0
+        module: github.com/fdsouvenir/gmcli@v0.2.1
         bins: ["gmcli"]
         label: Install gmcli with Go
 ---
