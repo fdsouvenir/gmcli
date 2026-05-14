@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
@@ -12,6 +13,8 @@ import (
 	"github.com/fdsouvenir/gmcli/internal/store"
 	gmsync "github.com/fdsouvenir/gmcli/internal/sync"
 )
+
+const syncHeartbeatInterval = 5 * time.Minute
 
 func syncCmd() *cobra.Command {
 	var follow bool
@@ -89,12 +92,20 @@ func syncCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(os.Stderr, "Connected. Streaming events. Ctrl-C to stop.")
-			select {
-			case <-ctx.Done():
-				fmt.Fprintln(os.Stderr, "Disconnecting...")
-				return nil
-			case err := <-pump.Fatal():
-				return err
+			heartbeat := time.NewTicker(syncHeartbeatInterval)
+			defer heartbeat.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					fmt.Fprintln(os.Stderr, "Disconnecting...")
+					return nil
+				case err := <-pump.Fatal():
+					return err
+				case <-heartbeat.C:
+					if err := st.TouchSync(ctx); err != nil {
+						logger.Debug().Err(err).Msg("sync heartbeat failed")
+					}
+				}
 			}
 		},
 	}

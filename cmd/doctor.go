@@ -15,19 +15,20 @@ import (
 )
 
 type doctorReport struct {
-	StoreRoot       string    `json:"store_root"`
-	SessionExists   bool      `json:"session_exists"`
-	SessionPath     string    `json:"session_path"`
-	Paired          bool      `json:"paired"`
-	PhoneID         string    `json:"phone_id,omitempty"`
-	StoreOpens      bool      `json:"store_opens"`
-	SchemaVersion   int       `json:"schema_version,omitempty"`
-	Conversations   int       `json:"conversations,omitempty"`
-	Messages        int       `json:"messages,omitempty"`
-	Contacts        int       `json:"contacts,omitempty"`
-	LastEventTime   time.Time `json:"last_event_time,omitempty"`
-	LastConnectTime time.Time `json:"last_connect_time,omitempty"`
-	Issues          []string  `json:"issues,omitempty"`
+	StoreRoot            string    `json:"store_root"`
+	SessionExists        bool      `json:"session_exists"`
+	SessionPath          string    `json:"session_path"`
+	Paired               bool      `json:"paired"`
+	PhoneID              string    `json:"phone_id,omitempty"`
+	StoreOpens           bool      `json:"store_opens"`
+	SchemaVersion        int       `json:"schema_version,omitempty"`
+	Conversations        int       `json:"conversations,omitempty"`
+	Messages             int       `json:"messages,omitempty"`
+	Contacts             int       `json:"contacts,omitempty"`
+	LastEventTime        time.Time `json:"last_event_time,omitempty"`
+	LastConnectTime      time.Time `json:"last_connect_time,omitempty"`
+	LastSyncActivityTime time.Time `json:"last_sync_activity_time,omitempty"`
+	Issues               []string  `json:"issues,omitempty"`
 }
 
 func doctorCmd() *cobra.Command {
@@ -36,7 +37,7 @@ func doctorCmd() *cobra.Command {
 		Short: "Inspect session, store, and freshness state",
 		Long: "Run a non-network self-check: does the session file exist and contain " +
 			"a paired device? Does the SQLite store open and report a healthy schema? " +
-			"How fresh is the last event?",
+			"How fresh is the last sync activity?",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signalContext(context.Background())
 			defer cancel()
@@ -107,6 +108,7 @@ func runDoctor(ctx context.Context) doctorReport {
 	if state, err := st.SyncState(ctx); err == nil {
 		r.LastEventTime = state.LastEventTime
 		r.LastConnectTime = state.LastConnectTime
+		r.LastSyncActivityTime = state.UpdatedAt
 	}
 	return r
 }
@@ -136,6 +138,11 @@ func renderDoctor(r doctorReport) {
 		fmt.Printf("  last connect:     %s\n", r.LastConnectTime.Format(time.RFC3339))
 	} else {
 		fmt.Printf("  last connect:     (none yet)\n")
+	}
+	if r.LastSyncActivityTime.UnixMilli() > 0 {
+		fmt.Printf("  last sync activity: %s\n", r.LastSyncActivityTime.Format(time.RFC3339))
+	} else {
+		fmt.Printf("  last sync activity: (none yet)\n")
 	}
 	if len(r.Issues) > 0 {
 		fmt.Println()

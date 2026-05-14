@@ -112,6 +112,19 @@ func (s *Store) MarkSync(ctx context.Context, lastEventTime, connectTime time.Ti
 	return err
 }
 
+// TouchSync records that the sync loop is still active without changing the
+// latest archived message or connection timestamp.
+func (s *Store) TouchSync(ctx context.Context) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sync_state
+		   SET updated_at = MAX(updated_at, ?)
+		 WHERE id = 1`,
+		now,
+	)
+	return err
+}
+
 // SyncState is what doctor/--json emit about freshness.
 type SyncState struct {
 	LastEventTime   time.Time

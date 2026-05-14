@@ -176,3 +176,42 @@ func TestMarkSyncMonotonic(t *testing.T) {
 		t.Fatalf("last_connect_ts regressed: %v", state.LastConnectTime)
 	}
 }
+
+func TestTouchSyncUpdatesActivityOnly(t *testing.T) {
+	st := openTempStore(t)
+	ctx := context.Background()
+	eventTime := time.UnixMilli(1_000_000)
+	connectTime := time.UnixMilli(2_000_000)
+	if err := st.MarkSync(ctx, eventTime, connectTime); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.SyncState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var after store.SyncState
+	for i := 0; i < 20; i++ {
+		time.Sleep(2 * time.Millisecond)
+		if err := st.TouchSync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		after, err = st.SyncState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.UpdatedAt.After(before.UpdatedAt) {
+			break
+		}
+	}
+
+	if !after.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("updated_at did not advance: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+	if !after.LastEventTime.Equal(eventTime) {
+		t.Fatalf("last_event_ts changed: %v", after.LastEventTime)
+	}
+	if !after.LastConnectTime.Equal(connectTime) {
+		t.Fatalf("last_connect_ts changed: %v", after.LastConnectTime)
+	}
+}

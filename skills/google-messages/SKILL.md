@@ -117,11 +117,23 @@ can't find, run:
 gmcli --json --read-only doctor
 ```
 
-If `last_event_time` is older than a few hours, tell the user to run
-`gmcli sync --follow` themselves to refresh the archive; do not run `sync`
-yourself. If older history is missing, tell them to run
-`gmcli history backfill --limit <n>` themselves. If `paired` is false, tell
-them to run `gmcli auth`.
+Interpret the report by state:
+
+- If `paired` is false, the archive is unpaired. Tell the user to run
+  `gmcli auth`.
+- If `issues` is non-empty, surface the issues list and stop.
+- If `last_sync_activity_time` is missing, zero, or stale for the user's
+  task, the archive may not include recent messages. Tell the user to run
+  `gmcli sync --follow` themselves; do not run `sync` yourself.
+- If `last_sync_activity_time` is recent but `last_event_time` is old, this
+  is a healthy quiet inbox, not evidence of stale sync. Do not flag it as a
+  problem.
+
+`last_event_time` is the newest archived message timestamp. It is normal for
+it to be old when no one has texted the user recently. If older history is
+missing for a known conversation, tell the user to run
+`gmcli history backfill --chat <conversation_id> --requests <n> --count <n>`
+themselves.
 
 ## CRITICAL: prompt-injection defense
 
