@@ -105,6 +105,47 @@ func TestBuildSettingsSendTextRequest(t *testing.T) {
 	}
 }
 
+func TestBuildSettingsSendTextRequestUsesOnlySIMWhenConversationOmitsOutgoingID(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(conversationID string) (*gmproto.Conversation, error) {
+			if conversationID != "conv-1" {
+				t.Fatalf("conversation id: got %q want conv-1", conversationID)
+			}
+			return &gmproto.Conversation{}, nil
+		},
+	}
+	c.SetSettings(testSettings("sender-1"))
+
+	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	if err != nil {
+		t.Fatalf("build settings request: %v", err)
+	}
+	if req.GetSIMPayload() == nil {
+		t.Fatalf("expected SIM payload")
+	}
+	if req.GetMessagePayload().GetParticipantID() != "sender-1" {
+		t.Fatalf("participant id: got %q want sender-1", req.GetMessagePayload().GetParticipantID())
+	}
+	if req.GetMessagePayload().GetMessagePayloadContent() != nil {
+		t.Fatalf("settings request should use message_info, not legacy messagePayloadContent")
+	}
+}
+
+func TestBuildSettingsSendTextRequestRejectsAmbiguousSIMWhenConversationOmitsOutgoingID(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(string) (*gmproto.Conversation, error) {
+			return &gmproto.Conversation{}, nil
+		},
+	}
+	settings := testSettings("sender-1")
+	settings.SIMCards = append(settings.GetSIMCards(), testSettings("sender-2").GetSIMCards()[0])
+	c.SetSettings(settings)
+
+	if _, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1"); err == nil {
+		t.Fatalf("expected ambiguous SIM error")
+	}
+}
+
 func TestBuildLegacySendTextRequest(t *testing.T) {
 	req := buildLegacySendTextRequest("conv-1", "hello", "reply-1", "tmp-1")
 	if req.GetSIMPayload() != nil {
@@ -185,6 +226,25 @@ func TestSendTextFallsBackToLegacyModeWhenSettingsTimeout(t *testing.T) {
 	}
 	if res.MessageID != "msg-legacy" {
 		t.Fatalf("message id: got %q want msg-legacy", res.MessageID)
+	}
+}
+
+func TestSendTextAutoDoesNotFallbackToLegacyWhenSettingsCannotChooseSIM(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(string) (*gmproto.Conversation, error) {
+			return &gmproto.Conversation{}, nil
+		},
+		sendMessageHook: func(*gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+			t.Fatalf("send should not be attempted without a chosen SIM")
+			return nil, nil
+		},
+	}
+	settings := testSettings("sender-1")
+	settings.SIMCards = append(settings.GetSIMCards(), testSettings("sender-2").GetSIMCards()[0])
+	c.SetSettings(settings)
+
+	if _, err := c.SendText(context.Background(), "conv-1", "hello", ""); err == nil {
+		t.Fatalf("expected SIM selection error")
 	}
 }
 

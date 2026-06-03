@@ -324,8 +324,7 @@ func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body,
 		if requested == SendModeSettings {
 			return nil, "", err
 		}
-		c.logger.Debug().Err(err).Msg("Falling back to legacy send request")
-		return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
+		return nil, "", err
 	}
 	return req, SendModeSettings, nil
 }
@@ -336,8 +335,18 @@ func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, t
 		return nil, fmt.Errorf("get conversation %s before send: %w", conversationID, err)
 	}
 	outgoingID := conv.GetDefaultOutgoingID()
+	var sim *gmproto.SIMCard
 	if outgoingID == "" {
-		return nil, fmt.Errorf("conversation %s has no default outgoing participant; cannot choose sender/SIM", conversationID)
+		var err error
+		outgoingID, sim, err = c.onlyUsableSIM()
+		if err != nil {
+			return nil, fmt.Errorf("conversation %s has no default outgoing participant: %w", conversationID, err)
+		}
+	} else {
+		sim = c.simForParticipant(outgoingID)
+		if sim == nil {
+			return nil, fmt.Errorf("conversation %s uses outgoing participant %s, but no matching SIM metadata was received", conversationID, outgoingID)
+		}
 	}
 	req := &gmproto.SendMessageRequest{
 		ConversationID: conversationID,
@@ -354,11 +363,7 @@ func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, t
 			}},
 		},
 	}
-	if sim := c.simForParticipant(outgoingID); sim != nil {
-		req.SIMPayload = sim.GetSIMData().GetSIMPayload()
-	} else {
-		return nil, fmt.Errorf("conversation %s uses outgoing participant %s, but no matching SIM metadata was received", conversationID, outgoingID)
-	}
+	req.SIMPayload = sim.GetSIMData().GetSIMPayload()
 	if replyToID != "" {
 		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
 	}
@@ -457,6 +462,30 @@ func (c *Client) simForParticipant(participantID string) *gmproto.SIMCard {
 		}
 	}
 	return nil
+}
+
+func (c *Client) onlyUsableSIM() (string, *gmproto.SIMCard, error) {
+	c.mu.RLock()
+	settings := c.settings
+	c.mu.RUnlock()
+	if settings == nil {
+		return "", nil, fmt.Errorf("no phone send settings are cached")
+	}
+
+	var only *gmproto.SIMCard
+	for _, sim := range settings.GetSIMCards() {
+		if sim.GetSIMParticipant().GetID() == "" || sim.GetSIMData().GetSIMPayload() == nil {
+			continue
+		}
+		if only != nil {
+			return "", nil, fmt.Errorf("multiple usable SIMs were received; cannot choose sender/SIM")
+		}
+		only = sim
+	}
+	if only == nil {
+		return "", nil, fmt.Errorf("no usable SIM metadata was received")
+	}
+	return only.GetSIMParticipant().GetID(), only, nil
 }
 
 func (c *Client) watchMessageEcho(tmpID string) (func(context.Context) (*libgm.WrappedMessage, error), func()) {
