@@ -61,22 +61,22 @@ clawhub skill publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.2.3 \
-  --changelog "Lead with search and summarization examples, add local-first trust signals, and improve ClawHub discovery copy." \
+  --version 0.3.0 \
+  --changelog "Cache Google Messages send settings for outbound SMS readiness, add doctor send-readiness diagnostics, and document the new fields for OpenClaw." \
   --tags latest,gmcli,google-messages,local,archive,sms,rcs,search,summarize,privacy
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.2.3 --files
+clawhub inspect google-messages-local-archive --version 0.3.0 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.2.3
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.3.0
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,8 +34,8 @@ func TestOpenMigratesFreshDB(t *testing.T) {
 	if state.LastEventTime.UnixMilli() != 0 || state.LastConnectTime.UnixMilli() != 0 {
 		t.Fatalf("expected unset (epoch) sync timestamps, got %+v", state)
 	}
-	if v, err := st.SchemaVersion(ctx); err != nil || v != 2 {
-		t.Fatalf("schema version: got %d err=%v, want 2", v, err)
+	if v, err := st.SchemaVersion(ctx); err != nil || v != 3 {
+		t.Fatalf("schema version: got %d err=%v, want 3", v, err)
 	}
 }
 
@@ -213,5 +214,32 @@ func TestTouchSyncUpdatesActivityOnly(t *testing.T) {
 	}
 	if !after.LastConnectTime.Equal(connectTime) {
 		t.Fatalf("last_connect_ts changed: %v", after.LastConnectTime)
+	}
+}
+
+func TestPhoneSettingsRoundTrip(t *testing.T) {
+	st := openTempStore(t)
+	ctx := context.Background()
+
+	if _, err := st.LatestPhoneSettings(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound before save, got %v", err)
+	}
+
+	raw := []byte{1, 2, 3, 4}
+	if err := st.SavePhoneSettings(ctx, raw, 2); err != nil {
+		t.Fatalf("save phone settings: %v", err)
+	}
+	got, err := st.LatestPhoneSettings(ctx)
+	if err != nil {
+		t.Fatalf("latest phone settings: %v", err)
+	}
+	if string(got.RawProto) != string(raw) {
+		t.Fatalf("raw proto mismatch: got %v want %v", got.RawProto, raw)
+	}
+	if got.SIMCount != 2 {
+		t.Fatalf("sim count: got %d want 2", got.SIMCount)
+	}
+	if got.UpdatedAt.UnixMilli() <= 0 {
+		t.Fatalf("updated_at was not set: %v", got.UpdatedAt)
 	}
 }

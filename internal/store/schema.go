@@ -1,7 +1,7 @@
 package store
 
 // schemaVersion is the migration target. Bump when migrations[] grows.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations are applied in order. Each runs in its own transaction; the
 // store records the highest applied version in the schema_version table.
@@ -128,5 +128,18 @@ var migrations = []string{
 	) STRICT;
 
 	INSERT INTO schema_version (version) VALUES (2);
+	`,
+	// v3: latest phone settings cache. Google Messages send requests need
+	// SIM metadata from Settings; caching the last event lets short-lived
+	// send commands avoid depending on receiving Settings during startup.
+	`
+	CREATE TABLE phone_settings (
+		id         INTEGER PRIMARY KEY CHECK (id = 1),
+		raw_proto  BLOB NOT NULL,
+		sim_count  INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL
+	) STRICT;
+
+	INSERT INTO schema_version (version) VALUES (3);
 	`,
 }

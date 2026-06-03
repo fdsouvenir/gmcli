@@ -136,7 +136,7 @@ cmd/                  Cobra command tree (auth, sync, version, doctor,
 internal/
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
-  store/              SQLite + FTS5 store (schema v2: + aliases table)
+  store/              SQLite + FTS5 store (schema v3: aliases + send settings cache)
   sync/               Event-to-store pump
   output/             Shared JSON / tab-aligned table renderers
   paths/              XDG path resolution (XDG_STATE_HOME)

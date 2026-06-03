@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
@@ -31,6 +34,25 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 	if err := st.TouchSync(ctx); err != nil {
 		t.Fatal(err)
 	}
+	settings := &gmproto.Settings{
+		SIMCards: []*gmproto.SIMCard{{
+			SIMParticipant: &gmproto.SIMParticipant{ID: "sender-1"},
+			SIMData: &gmproto.SIMData{
+				SIMPayload: &gmproto.SIMPayload{Two: 1, SIMNumber: 1},
+			},
+		}},
+	}
+	raw, err := proto.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SavePhoneSettings(ctx, raw, len(settings.GetSIMCards())); err != nil {
+		t.Fatal(err)
+	}
+	cachedSettings, err := st.LatestPhoneSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	state, err := st.SyncState(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -48,5 +70,14 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 	}
 	if !report.LastSyncActivityTime.Equal(state.UpdatedAt) {
 		t.Fatalf("last sync activity: got %v want %v", report.LastSyncActivityTime, state.UpdatedAt)
+	}
+	if !report.SendSettingsCached {
+		t.Fatalf("expected send settings cached")
+	}
+	if report.SendSettingsSIMCount != 1 {
+		t.Fatalf("send settings SIM count: got %d want 1", report.SendSettingsSIMCount)
+	}
+	if !report.SendSettingsUpdated.Equal(cachedSettings.UpdatedAt) {
+		t.Fatalf("send settings updated: got %v want %v", report.SendSettingsUpdated, cachedSettings.UpdatedAt)
 	}
 }

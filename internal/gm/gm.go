@@ -27,6 +27,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/paths"
 )
@@ -151,6 +152,25 @@ func (c *Client) WaitForReady(ctx context.Context) error {
 // etc.). Higher-level operations should prefer the typed wrappers below.
 func (c *Client) Underlying() *libgm.Client { return c.libgm }
 
+// SetSettings seeds the send metadata cache from persisted phone settings.
+func (c *Client) SetSettings(settings *gmproto.Settings) {
+	if settings == nil {
+		return
+	}
+	cloned, ok := proto.Clone(settings).(*gmproto.Settings)
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	c.settings = cloned
+	c.mu.Unlock()
+}
+
+// RequestUpdates asks the phone for a fresh GET_UPDATES payload.
+func (c *Client) RequestUpdates() error {
+	return c.libgm.SetActiveSession()
+}
+
 // SendTextResult describes a successful send.
 type SendTextResult struct {
 	MessageID      string
@@ -172,7 +192,7 @@ func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID s
 	settingsCtx, cancel := context.WithTimeout(ctx, sendMetadataTimeout)
 	defer cancel()
 	if err := c.WaitForSettings(settingsCtx); err != nil {
-		return nil, fmt.Errorf("wait for phone send settings: %w", err)
+		return nil, fmt.Errorf("wait for phone send settings: no phone send settings/SIM metadata available for this paired session: %w", err)
 	}
 	tmpID := uuid.NewString()
 	req, err := c.buildSendTextRequest(conversationID, body, replyToID, tmpID)

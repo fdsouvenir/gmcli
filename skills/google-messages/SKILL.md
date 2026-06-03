@@ -1,7 +1,7 @@
 ---
 name: google-messages-local-archive
 description: Search and summarize your local Google Messages SMS/RCS history from OpenClaw. Ask who said what, find old texts, and get conversation context while your message archive stays on your machine and the bundled workflow stays read-only by default.
-version: 0.2.3
+version: 0.3.0
 homepage: https://github.com/fdsouvenir/gmcli
 metadata:
   openclaw:
@@ -10,9 +10,9 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v0.2.3
+        module: github.com/fdsouvenir/gmcli@v0.3.0
         bins: ["gmcli"]
-        label: Install gmcli v0.2.3 with Go
+        label: Install gmcli v0.3.0 with Go
 ---
 
 # Google Messages Local Archive
@@ -175,6 +175,10 @@ Interpret the report by state:
 - If `last_sync_activity_time` is recent but `last_event_time` is old, this
   is a healthy quiet inbox, not evidence of stale sync. Do not flag it as a
   problem.
+- `send_settings_cached`, `send_settings_sim_count`, and
+  `send_settings_updated_at` report write-path readiness only. They are not
+  required for read-only archive search, but a missing cache explains why an
+  explicitly authorized send may fail before reaching the phone.
 
 `last_event_time` is the newest archived message timestamp. It is normal for
 it to be old when no one has texted the user recently. If older history is

@@ -18,6 +18,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
@@ -55,6 +56,8 @@ func (p *Pump) Handle(evt any) {
 		p.onConversation(ctx, e)
 	case *libgm.WrappedMessage:
 		p.onMessage(ctx, e)
+	case *gmproto.Settings:
+		p.onSettings(ctx, e)
 	case *events.PhoneNotResponding:
 		p.logger.Warn().Msg("Phone not responding — messages will queue until it reconnects")
 	case *events.PhoneRespondingAgain:
@@ -230,6 +233,20 @@ func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
 	}
 	if !w.IsOld {
 		_ = p.store.MarkSync(ctx, time.UnixMilli(row.TimestampMS), time.Now())
+	}
+}
+
+func (p *Pump) onSettings(ctx context.Context, settings *gmproto.Settings) {
+	if settings == nil {
+		return
+	}
+	raw, err := proto.Marshal(settings)
+	if err != nil {
+		p.logger.Error().Err(err).Msg("Marshal phone settings failed")
+		return
+	}
+	if err := p.store.SavePhoneSettings(ctx, raw, len(settings.GetSIMCards())); err != nil {
+		p.logger.Error().Err(err).Msg("Save phone settings failed")
 	}
 }
 

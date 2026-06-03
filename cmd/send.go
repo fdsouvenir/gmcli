@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/output"
@@ -45,7 +48,16 @@ func sendTextCmd() *cobra.Command {
 			if err := requireWritable(); err != nil {
 				return err
 			}
-			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, _ *store.Store) error {
+			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, st *store.Store) error {
+				cached, err := seedCachedSendSettings(ctx, c, st)
+				if err != nil {
+					return err
+				}
+				if !cached {
+					if err := c.RequestUpdates(); err != nil {
+						return fmt.Errorf("request phone send settings refresh: %w", err)
+					}
+				}
 				res, err := c.SendText(ctx, to, message, replyTo)
 				if err != nil {
 					return err
@@ -69,6 +81,28 @@ func sendTextCmd() *cobra.Command {
 	c.Flags().StringVar(&message, "message", "", "message body")
 	c.Flags().StringVar(&replyTo, "reply-to", "", "optional message_id to quote-reply to")
 	return c
+}
+
+func seedCachedSendSettings(ctx context.Context, c *gm.Client, st *store.Store) (bool, error) {
+	cached, err := st.LatestPhoneSettings(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load cached phone send settings: %w", err)
+	}
+	if cached.SIMCount <= 0 {
+		return false, nil
+	}
+	settings := &gmproto.Settings{}
+	if err := proto.Unmarshal(cached.RawProto, settings); err != nil {
+		return false, fmt.Errorf("decode cached phone send settings: %w", err)
+	}
+	if len(settings.GetSIMCards()) == 0 {
+		return false, nil
+	}
+	c.SetSettings(settings)
+	return true, nil
 }
 
 func sendReactCmd() *cobra.Command {

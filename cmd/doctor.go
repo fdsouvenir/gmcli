@@ -28,6 +28,9 @@ type doctorReport struct {
 	LastEventTime        time.Time `json:"last_event_time,omitempty"`
 	LastConnectTime      time.Time `json:"last_connect_time,omitempty"`
 	LastSyncActivityTime time.Time `json:"last_sync_activity_time,omitempty"`
+	SendSettingsCached   bool      `json:"send_settings_cached"`
+	SendSettingsSIMCount int       `json:"send_settings_sim_count,omitempty"`
+	SendSettingsUpdated  time.Time `json:"send_settings_updated_at,omitempty"`
 	Issues               []string  `json:"issues,omitempty"`
 }
 
@@ -110,6 +113,19 @@ func runDoctor(ctx context.Context) doctorReport {
 		r.LastConnectTime = state.LastConnectTime
 		r.LastSyncActivityTime = state.UpdatedAt
 	}
+	settings, err := st.LatestPhoneSettings(ctx)
+	switch {
+	case err == nil:
+		r.SendSettingsCached = true
+		r.SendSettingsSIMCount = settings.SIMCount
+		r.SendSettingsUpdated = settings.UpdatedAt
+	case errors.Is(err, store.ErrNotFound):
+		if r.Paired {
+			r.Issues = append(r.Issues, "no cached send settings/SIM metadata yet — run sync until a settings event is received before sending")
+		}
+	case err != nil:
+		r.Issues = append(r.Issues, fmt.Sprintf("read cached send settings: %v", err))
+	}
 	return r
 }
 
@@ -143,6 +159,13 @@ func renderDoctor(r doctorReport) {
 		fmt.Printf("  last sync activity: %s\n", r.LastSyncActivityTime.Format(time.RFC3339))
 	} else {
 		fmt.Printf("  last sync activity: (none yet)\n")
+	}
+	fmt.Printf("  send settings cached: %v\n", r.SendSettingsCached)
+	if r.SendSettingsCached {
+		fmt.Printf("  send settings SIMs:   %d\n", r.SendSettingsSIMCount)
+		if r.SendSettingsUpdated.UnixMilli() > 0 {
+			fmt.Printf("  send settings updated: %s\n", r.SendSettingsUpdated.Format(time.RFC3339))
+		}
 	}
 	if len(r.Issues) > 0 {
 		fmt.Println()
