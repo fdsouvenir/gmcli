@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/store"
@@ -31,6 +33,7 @@ type doctorReport struct {
 	SendSettingsCached   bool      `json:"send_settings_cached"`
 	SendSettingsSIMCount int       `json:"send_settings_sim_count,omitempty"`
 	SendSettingsUpdated  time.Time `json:"send_settings_updated_at,omitempty"`
+	SendSettingsDefault  *bool     `json:"send_settings_cached_default_sms_app,omitempty"`
 	Issues               []string  `json:"issues,omitempty"`
 }
 
@@ -119,6 +122,11 @@ func runDoctor(ctx context.Context) doctorReport {
 		r.SendSettingsCached = true
 		r.SendSettingsSIMCount = settings.SIMCount
 		r.SendSettingsUpdated = settings.UpdatedAt
+		decoded := &gmproto.Settings{}
+		if err := proto.Unmarshal(settings.RawProto, decoded); err == nil && decoded.GetRCSSettings() != nil {
+			isDefault := decoded.GetRCSSettings().GetIsDefaultSMSApp()
+			r.SendSettingsDefault = &isDefault
+		}
 	case errors.Is(err, store.ErrNotFound):
 		// Missing Settings/SIM metadata is not a hard send blocker; send text
 		// can fall back to the legacy request shape with echo confirmation.
@@ -162,6 +170,9 @@ func renderDoctor(r doctorReport) {
 	fmt.Printf("  send settings cached: %v\n", r.SendSettingsCached)
 	if r.SendSettingsCached {
 		fmt.Printf("  send settings SIMs:   %d\n", r.SendSettingsSIMCount)
+		if r.SendSettingsDefault != nil {
+			fmt.Printf("  cached default SMS app: %v\n", *r.SendSettingsDefault)
+		}
 		if r.SendSettingsUpdated.UnixMilli() > 0 {
 			fmt.Printf("  send settings updated: %s\n", r.SendSettingsUpdated.Format(time.RFC3339))
 		}

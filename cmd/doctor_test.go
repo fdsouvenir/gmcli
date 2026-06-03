@@ -41,6 +41,7 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 				SIMPayload: &gmproto.SIMPayload{Two: 1, SIMNumber: 1},
 			},
 		}},
+		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: true},
 	}
 	raw, err := proto.Marshal(settings)
 	if err != nil {
@@ -79,5 +80,8 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 	}
 	if !report.SendSettingsUpdated.Equal(cachedSettings.UpdatedAt) {
 		t.Fatalf("send settings updated: got %v want %v", report.SendSettingsUpdated, cachedSettings.UpdatedAt)
+	}
+	if report.SendSettingsDefault == nil || !*report.SendSettingsDefault {
+		t.Fatalf("send settings default SMS app: got %v want true", report.SendSettingsDefault)
 	}
 }
