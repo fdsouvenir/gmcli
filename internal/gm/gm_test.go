@@ -131,6 +131,48 @@ func TestBuildSettingsSendTextRequestUsesOnlySIMWhenConversationOmitsOutgoingID(
 	}
 }
 
+func TestBuildSettingsSendTextRequestForcesRCSForUnknownAutoConversationWithRCSSIM(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(string) (*gmproto.Conversation, error) {
+			return &gmproto.Conversation{
+				DefaultOutgoingID: "sender-1",
+				Type:              gmproto.ConversationType_UNKNOWN_CONVERSATION_TYPE,
+				SendMode:          gmproto.ConversationSendMode_SEND_MODE_AUTO,
+			}, nil
+		},
+	}
+	c.SetSettings(testSettingsWithRCS("sender-1"))
+
+	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	if err != nil {
+		t.Fatalf("build settings request: %v", err)
+	}
+	if !req.GetForceRCS() {
+		t.Fatalf("expected force RCS for unknown auto conversation with RCS-enabled SIM")
+	}
+}
+
+func TestBuildSettingsSendTextRequestDoesNotForceRCSForSMSConversation(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(string) (*gmproto.Conversation, error) {
+			return &gmproto.Conversation{
+				DefaultOutgoingID: "sender-1",
+				Type:              gmproto.ConversationType_SMS,
+				SendMode:          gmproto.ConversationSendMode_SEND_MODE_AUTO,
+			}, nil
+		},
+	}
+	c.SetSettings(testSettingsWithRCS("sender-1"))
+
+	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	if err != nil {
+		t.Fatalf("build settings request: %v", err)
+	}
+	if req.GetForceRCS() {
+		t.Fatalf("did not expect force RCS for SMS conversation")
+	}
+}
+
 func TestBuildSettingsSendTextRequestRejectsAmbiguousSIMWhenConversationOmitsOutgoingID(t *testing.T) {
 	c := &Client{
 		getConversationHook: func(string) (*gmproto.Conversation, error) {
@@ -376,4 +418,10 @@ func testSettings(participantID string) *gmproto.Settings {
 			},
 		}},
 	}
+}
+
+func testSettingsWithRCS(participantID string) *gmproto.Settings {
+	settings := testSettings(participantID)
+	settings.SIMCards[0].RCSChats = &gmproto.RCSChats{Enabled: true}
+	return settings
 }

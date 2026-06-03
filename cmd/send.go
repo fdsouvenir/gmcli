@@ -235,10 +235,16 @@ func runSendInspect(conversationID string) (sendInspectResult, error) {
 		}
 	}
 	res.OtherParticipantIDs = append(res.OtherParticipantIDs, conv.GetOtherParticipants()...)
-	res.SettingsRequestForceRCS = conv.GetType() == gmproto.ConversationType_RCS &&
-		conv.GetSendMode() == gmproto.ConversationSendMode_SEND_MODE_AUTO &&
+	res.SettingsRequestForceRCS = conversationCanForceRCS(conv.GetType(), conv.GetSendMode()) &&
 		settingsRCSAvailable(settings, res.DefaultOutgoingID)
 	return res, nil
+}
+
+func conversationCanForceRCS(convType gmproto.ConversationType, sendMode gmproto.ConversationSendMode) bool {
+	if sendMode != gmproto.ConversationSendMode_SEND_MODE_AUTO {
+		return false
+	}
+	return convType == gmproto.ConversationType_RCS || convType == gmproto.ConversationType_UNKNOWN_CONVERSATION_TYPE
 }
 
 func settingsRCSAvailable(settings *gmproto.Settings, participantID string) bool {
@@ -515,8 +521,8 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	if err := waitForConnected(ctx, client); err != nil {
 		return err
 	}
-	if err := waitForReadySignal(ctx, ready); err != nil {
-		return err
+	if err := waitForReadySignal(ctx, ready, 5*time.Second); err != nil {
+		logger.Debug().Err(err).Msg("ClientReady not received before send grace period; continuing with connected session")
 	}
 	if err := client.RequestUpdates(); err != nil {
 		return fmt.Errorf("set active Google Messages session: %w", err)
@@ -531,13 +537,17 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	return fn(ctx, client, st)
 }
 
-func waitForReadySignal(ctx context.Context, ready <-chan error) error {
+func waitForReadySignal(ctx context.Context, ready <-chan error, grace time.Duration) error {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
 	select {
 	case err := <-ready:
 		if err != nil {
 			return fmt.Errorf("wait for ready: %w", err)
 		}
 		return nil
+	case <-timer.C:
+		return fmt.Errorf("wait for ready: timed out after %s", grace)
 	case <-ctx.Done():
 		return fmt.Errorf("wait for ready: %w", ctx.Err())
 	}

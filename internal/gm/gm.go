@@ -351,6 +351,7 @@ func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, t
 	req := &gmproto.SendMessageRequest{
 		ConversationID: conversationID,
 		TmpID:          tmpID,
+		ForceRCS:       forceRCSForConversation(conv, sim),
 		MessagePayload: &gmproto.MessagePayload{
 			ConversationID: conversationID,
 			ParticipantID:  outgoingID,
@@ -368,6 +369,18 @@ func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, t
 		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
 	}
 	return req, nil
+}
+
+func forceRCSForConversation(conv *gmproto.Conversation, sim *gmproto.SIMCard) bool {
+	if !sim.GetRCSChats().GetEnabled() || conv.GetSendMode() != gmproto.ConversationSendMode_SEND_MODE_AUTO {
+		return false
+	}
+	switch conv.GetType() {
+	case gmproto.ConversationType_RCS, gmproto.ConversationType_UNKNOWN_CONVERSATION_TYPE:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildLegacySendTextRequest(conversationID, body, replyToID, tmpID string) *gmproto.SendMessageRequest {
