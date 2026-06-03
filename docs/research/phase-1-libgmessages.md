@@ -338,3 +338,15 @@ Settings should not remain a hard blocker. The send path should prefer real
 `Settings.SIMCards` when available, never synthesize SIM metadata, and fall
 back to the legacy request shape when Settings are unavailable. Success should
 still require the phone to echo the outgoing message.
+
+Further live testing on June 3, 2026 showed the original send failure was not
+caused by missing cached Settings alone. The stale pairing still allowed
+read-only RPCs, but `IsBugleDefault` returned false and `GetConversation`
+returned sparse metadata with no `DefaultOutgoingID` and unknown conversation
+type. After removing the phone-side web pairing, updating to the current
+`mautrix-gmessages` protocol library, and re-pairing with a fresh QR token,
+the same phone reported Google Messages as the default SMS app, returned RCS
+conversation metadata with outgoing participant `2`, and accepted a
+Settings/SIM-backed send request. This makes re-pairing a first-line
+remediation when sends fail with live default-SMS false while cached Settings
+still report default-SMS true.

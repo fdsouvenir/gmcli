@@ -43,7 +43,7 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 ## Install
 
-Requires Go 1.24 or newer.
+Requires Go 1.25 or newer.
 
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
@@ -83,6 +83,8 @@ initial beta releases.
 # 1. One-time pairing (renders a QR code in the terminal — scan with the
 #    Google Messages app on your phone, Settings → Device pairing → QR code).
 gmcli auth
+# In remote/sandboxed terminals, write a scan-friendly PNG instead:
+gmcli auth --qr-png /tmp/gmcli-pair-qr.png
 
 # 2. Sync messages from the phone into the local database. --follow keeps
 #    the connection open and writes new messages as they arrive.
@@ -111,6 +113,8 @@ gmcli history backfill --chat <conv-id> --requests 10 --count 50
 
 # 6. Write to the phone (always requires --read-only=false).
 gmcli sync send-settings
+gmcli send preflight
+gmcli send inspect --to <conv-id>
 gmcli --read-only=false send text --to <conv-id> --message "on my way"
 gmcli --read-only=false send react --message <msg-id> --emoji "👍"
 gmcli media download --message <msg-id>
@@ -118,6 +122,8 @@ gmcli media download --message <msg-id>
 # message back with its canonical message_id.
 # `sync send-settings` is a read-only network diagnostic that refreshes the
 # local Settings/SIM metadata cache used by the preferred send request shape.
+# `send preflight` and `send inspect` are read-only diagnostics for live phone
+# send state, default-SMS status, conversation send mode, and SIM/RCS metadata.
 
 # Every command supports --json for machine-readable output and --full to
 # disable truncation in tables.

@@ -1,7 +1,7 @@
 ---
 name: google-messages-local-archive
 description: Search and summarize your local Google Messages SMS/RCS history from OpenClaw. Ask who said what, find old texts, and get conversation context while your message archive stays on your machine and the bundled workflow stays read-only by default.
-version: 0.3.0
+version: 0.3.1
 homepage: https://github.com/fdsouvenir/gmcli
 metadata:
   openclaw:
@@ -10,9 +10,9 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v0.3.0
+        module: github.com/fdsouvenir/gmcli@v0.3.1
         bins: ["gmcli"]
-        label: Install gmcli v0.3.0 with Go
+        label: Install gmcli v0.3.1 with Go
 ---
 
 # Google Messages Local Archive
