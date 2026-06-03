@@ -36,6 +36,7 @@ type sendPreflightResult struct {
 	Connected                bool      `json:"connected"`
 	RequestedActiveSession   bool      `json:"requested_active_session"`
 	PhoneDefaultSMSApp       bool      `json:"phone_default_sms_app"`
+	PhoneDefaultSMSAppProbed bool      `json:"phone_default_sms_app_probed"`
 	SendSettingsCached       bool      `json:"send_settings_cached"`
 	SendSettingsSIMCount     int       `json:"send_settings_sim_count,omitempty"`
 	SendSettingsUpdated      time.Time `json:"send_settings_updated_at,omitempty"`
@@ -121,9 +122,6 @@ func sendPreflightCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !res.SendReady {
-				return fmt.Errorf("send preflight failed")
-			}
 			return nil
 		},
 	}
@@ -178,14 +176,16 @@ func runSendPreflight() (sendPreflightResult, error) {
 		return res, fmt.Errorf("set active Google Messages session: %w", err)
 	}
 	res.RequestedActiveSession = true
+	res.SendReady = true
 	defaultSMS, err := client.IsDefaultSMSApp()
 	if err != nil {
-		return res, fmt.Errorf("check Google Messages default SMS app state: %w", err)
-	}
-	res.PhoneDefaultSMSApp = defaultSMS
-	res.SendReady = defaultSMS
-	if !defaultSMS {
-		res.Issues = append(res.Issues, "phone reports Google Messages is not the default SMS app")
+		res.Issues = append(res.Issues, fmt.Sprintf("default SMS app probe failed: %v", err))
+	} else {
+		res.PhoneDefaultSMSApp = defaultSMS
+		res.PhoneDefaultSMSAppProbed = true
+		if !defaultSMS {
+			res.Issues = append(res.Issues, "default SMS app probe returned false; cached settings and phone UI may still show Google Messages as default")
+		}
 	}
 	return res, nil
 }
@@ -206,7 +206,11 @@ func renderSendPreflight(res sendPreflightResult) {
 	fmt.Println("====================")
 	fmt.Printf("  connected:              %v\n", res.Connected)
 	fmt.Printf("  requested active:       %v\n", res.RequestedActiveSession)
-	fmt.Printf("  phone default SMS app:  %v\n", res.PhoneDefaultSMSApp)
+	if res.PhoneDefaultSMSAppProbed {
+		fmt.Printf("  phone default SMS app:  %v\n", res.PhoneDefaultSMSApp)
+	} else {
+		fmt.Println("  phone default SMS app:  unknown")
+	}
 	fmt.Printf("  send settings cached:   %v\n", res.SendSettingsCached)
 	if res.SendSettingsCached {
 		fmt.Printf("  send settings SIMs:     %d\n", res.SendSettingsSIMCount)
@@ -338,10 +342,9 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	}
 	defaultSMS, err := client.IsDefaultSMSApp()
 	if err != nil {
-		return fmt.Errorf("check Google Messages default SMS app state: %w", err)
-	}
-	if !defaultSMS {
-		return fmt.Errorf("phone reports Google Messages is not the default SMS app; set Google Messages as the default SMS app on the phone and retry")
+		logger.Warn().Err(err).Msg("Default SMS app probe failed; continuing send")
+	} else if !defaultSMS {
+		logger.Warn().Msg("Default SMS app probe returned false; continuing send")
 	}
 
 	return fn(ctx, client, st)
