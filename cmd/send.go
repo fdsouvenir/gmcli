@@ -64,15 +64,10 @@ func sendTextCmd() *cobra.Command {
 				}
 
 				if flags.jsonOut {
-					return output.JSON(os.Stdout, map[string]any{
-						"sent":            true,
-						"conversation_id": res.ConversationID,
-						"message_id":      res.MessageID,
-						"tmp_id":          res.TmpID,
-					})
+					return output.JSON(os.Stdout, sendTextResultJSON(res))
 				}
-				fmt.Fprintf(os.Stderr, "Sent to %s (message_id %s, tmp_id %s)\n",
-					res.ConversationID, res.MessageID, res.TmpID)
+				fmt.Fprintf(os.Stderr, "Sent to %s (message_id %s, tmp_id %s, mode %s)\n",
+					res.ConversationID, res.MessageID, res.TmpID, res.SendMode)
 				return nil
 			})
 		},
@@ -81,6 +76,16 @@ func sendTextCmd() *cobra.Command {
 	c.Flags().StringVar(&message, "message", "", "message body")
 	c.Flags().StringVar(&replyTo, "reply-to", "", "optional message_id to quote-reply to")
 	return c
+}
+
+func sendTextResultJSON(res *gm.SendTextResult) map[string]any {
+	return map[string]any{
+		"sent":            true,
+		"conversation_id": res.ConversationID,
+		"message_id":      res.MessageID,
+		"tmp_id":          res.TmpID,
+		"send_mode":       res.SendMode,
+	}
 }
 
 func seedCachedSendSettings(ctx context.Context, c *gm.Client, st *store.Store) (bool, error) {

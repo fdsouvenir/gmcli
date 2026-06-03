@@ -66,6 +66,9 @@ initial beta releases.
 - Live-device coverage is still limited. Before relying on gmcli unattended,
   test `auth`, `sync`, query commands, `history backfill`, `media download`,
   and a deliberate send with your own Google Messages account.
+- Sending prefers real phone `Settings`/SIM metadata when available, but can
+  fall back to gmcli's older minimal request shape. `gmcli sync send-settings`
+  is available when you want to inspect or refresh the preferred metadata path.
 - History backfill is best-effort and depends on what Google Messages returns
   through the paired phone.
 - The phone must be online for sync, backfill, sends, and media downloads.
@@ -107,11 +110,14 @@ gmcli history backfill --chat <conv-id> --requests 10 --count 50
 # messages_added_for_chat.
 
 # 6. Write to the phone (always requires --read-only=false).
+gmcli sync send-settings
 gmcli --read-only=false send text --to <conv-id> --message "on my way"
 gmcli --read-only=false send react --message <msg-id> --emoji "👍"
 gmcli media download --message <msg-id>
 # `send text` only reports success after Google Messages echoes the outgoing
 # message back with its canonical message_id.
+# `sync send-settings` is a read-only network diagnostic that refreshes the
+# local Settings/SIM metadata cache used by the preferred send request shape.
 
 # Every command supports --json for machine-readable output and --full to
 # disable truncation in tables.

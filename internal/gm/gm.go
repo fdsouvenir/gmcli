@@ -37,14 +37,21 @@ import (
 const PairTimeout = 5 * time.Minute
 
 // sendMetadataTimeout bounds how long a write waits for the phone settings
-// event that carries SIM metadata. mautrix/gmessages includes this metadata
-// in send requests; sending without it can be accepted but not actually sent
-// on some devices.
+// event that carries preferred SIM metadata before falling back to the legacy
+// send request shape.
 const sendMetadataTimeout = 10 * time.Second
 
 // EventHandler is invoked for each event delivered by libgm. The argument
 // type is one of the concrete types in pkg/libgm/events or pkg/libgm/gmproto.
 type EventHandler func(evt any)
+
+// SendMode identifies which Google Messages request shape was used.
+type SendMode string
+
+const (
+	SendModeSettings SendMode = "settings"
+	SendModeLegacy   SendMode = "legacy"
+)
 
 // Client is a thin wrapper around *libgm.Client adding fan-out event
 // subscription and persistence on AuthTokenRefreshed.
@@ -57,6 +64,10 @@ type Client struct {
 	mu          sync.RWMutex
 	subscribers []EventHandler
 	settings    *gmproto.Settings
+
+	sendMessageHook     func(*gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error)
+	getConversationHook func(string) (*gmproto.Conversation, error)
+	sendMetadataWait    time.Duration
 }
 
 // Open loads session.json and returns a connected-but-not-yet-Connect()'d
@@ -176,6 +187,7 @@ type SendTextResult struct {
 	MessageID      string
 	ConversationID string
 	TmpID          string
+	SendMode       SendMode
 }
 
 // SendText sends a text message into the given conversation. ReplyToID is
@@ -189,20 +201,15 @@ func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID s
 	if body == "" {
 		return nil, fmt.Errorf("message body is required")
 	}
-	settingsCtx, cancel := context.WithTimeout(ctx, sendMetadataTimeout)
-	defer cancel()
-	if err := c.WaitForSettings(settingsCtx); err != nil {
-		return nil, fmt.Errorf("wait for phone send settings: no phone send settings/SIM metadata available for this paired session: %w", err)
-	}
 	tmpID := uuid.NewString()
-	req, err := c.buildSendTextRequest(conversationID, body, replyToID, tmpID)
+	req, mode, err := c.buildSendTextRequest(ctx, conversationID, body, replyToID, tmpID)
 	if err != nil {
 		return nil, err
 	}
 	waitEcho, unsubscribe := c.watchMessageEcho(tmpID)
 	defer unsubscribe()
 
-	resp, err := c.libgm.SendMessage(req)
+	resp, err := c.sendMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("libgm send: %w", err)
 	}
@@ -218,11 +225,33 @@ func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID s
 		MessageID:      echo.Message.GetMessageID(),
 		ConversationID: echo.Message.GetConversationID(),
 		TmpID:          tmpID,
+		SendMode:       mode,
 	}, nil
 }
 
-func (c *Client) buildSendTextRequest(conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, error) {
-	conv, err := c.libgm.GetConversation(conversationID)
+func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, SendMode, error) {
+	settingsCtx, cancel := context.WithTimeout(ctx, c.sendMetadataWaitDuration())
+	defer cancel()
+	if err := c.WaitForSettings(settingsCtx); err != nil {
+		if ctx.Err() != nil {
+			return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
+		}
+		return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
+	}
+
+	req, err := c.buildSettingsSendTextRequest(conversationID, body, replyToID, tmpID)
+	if err != nil {
+		c.logger.Debug().Err(err).Msg("Falling back to legacy send request")
+		return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
+	}
+	return req, SendModeSettings, nil
+}
+
+func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, error) {
+	conv, err := c.getConversation(conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("get conversation %s before send: %w", conversationID, err)
 	}
@@ -256,8 +285,48 @@ func (c *Client) buildSendTextRequest(conversationID, body, replyToID, tmpID str
 	return req, nil
 }
 
+func buildLegacySendTextRequest(conversationID, body, replyToID, tmpID string) *gmproto.SendMessageRequest {
+	req := &gmproto.SendMessageRequest{
+		ConversationID: conversationID,
+		TmpID:          tmpID,
+		MessagePayload: &gmproto.MessagePayload{
+			ConversationID: conversationID,
+			TmpID:          tmpID,
+			TmpID2:         tmpID,
+			MessagePayloadContent: &gmproto.MessagePayloadContent{
+				MessageContent: &gmproto.MessageContent{Content: body},
+			},
+		},
+	}
+	if replyToID != "" {
+		req.Reply = &gmproto.ReplyPayload{MessageID: replyToID}
+	}
+	return req
+}
+
+func (c *Client) sendMessage(req *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+	if c.sendMessageHook != nil {
+		return c.sendMessageHook(req)
+	}
+	return c.libgm.SendMessage(req)
+}
+
+func (c *Client) getConversation(conversationID string) (*gmproto.Conversation, error) {
+	if c.getConversationHook != nil {
+		return c.getConversationHook(conversationID)
+	}
+	return c.libgm.GetConversation(conversationID)
+}
+
+func (c *Client) sendMetadataWaitDuration() time.Duration {
+	if c.sendMetadataWait > 0 {
+		return c.sendMetadataWait
+	}
+	return sendMetadataTimeout
+}
+
 // WaitForSettings blocks until libgm emits the phone settings event. Send
-// requests need its SIM metadata to match the browser client shape.
+// requests prefer its SIM metadata to match the browser client shape.
 func (c *Client) WaitForSettings(ctx context.Context) error {
 	c.mu.RLock()
 	hasSettings := c.settings != nil

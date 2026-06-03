@@ -120,9 +120,8 @@ func runDoctor(ctx context.Context) doctorReport {
 		r.SendSettingsSIMCount = settings.SIMCount
 		r.SendSettingsUpdated = settings.UpdatedAt
 	case errors.Is(err, store.ErrNotFound):
-		if r.Paired {
-			r.Issues = append(r.Issues, "no cached send settings/SIM metadata yet — run sync until a settings event is received before sending")
-		}
+		// Missing Settings/SIM metadata is not a hard send blocker; send text
+		// can fall back to the legacy request shape with echo confirmation.
 	case err != nil:
 		r.Issues = append(r.Issues, fmt.Sprintf("read cached send settings: %v", err))
 	}

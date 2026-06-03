@@ -68,3 +68,18 @@ func TestSeedCachedSendSettingsMissing(t *testing.T) {
 		t.Fatalf("expected missing settings not to seed client")
 	}
 }
+
+func TestSendTextResultJSONIncludesSendMode(t *testing.T) {
+	got := sendTextResultJSON(&gm.SendTextResult{
+		MessageID:      "msg-1",
+		ConversationID: "conv-1",
+		TmpID:          "tmp-1",
+		SendMode:       gm.SendModeLegacy,
+	})
+	if got["sent"] != true {
+		t.Fatalf("sent: got %#v want true", got["sent"])
+	}
+	if got["send_mode"] != gm.SendModeLegacy {
+		t.Fatalf("send mode: got %#v want %q", got["send_mode"], gm.SendModeLegacy)
+	}
+}

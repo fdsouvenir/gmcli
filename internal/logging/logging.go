@@ -27,7 +27,7 @@ func New(w io.Writer, level string, jsonOut bool) (zerolog.Logger, error) {
 			c.TimeFormat = time.Stamp
 		})
 	}
-	return zerolog.New(out).Level(lvl).With().Timestamp().Logger(), nil
+	return zerolog.New(out).Level(lvl).Hook(sanitizeLibGMHook{}).With().Timestamp().Logger(), nil
 }
 
 // Default builds a logger writing to stderr with sensible defaults.
@@ -38,4 +38,18 @@ func Default(level string, jsonOut bool) zerolog.Logger {
 		l, _ = New(os.Stderr, "info", jsonOut)
 	}
 	return l
+}
+
+type sanitizeLibGMHook struct{}
+
+func (sanitizeLibGMHook) Run(e *zerolog.Event, level zerolog.Level, message string) {
+	if level != zerolog.WarnLevel {
+		return
+	}
+	switch message {
+	case "Got unknown event type", "Got unknown message":
+		// Upstream libgm attaches base64-encoded protocol payloads to these
+		// warnings. gmcli keeps those blobs out of normal diagnostic logs.
+		e.Discard()
+	}
 }

@@ -177,8 +177,10 @@ Interpret the report by state:
   problem.
 - `send_settings_cached`, `send_settings_sim_count`, and
   `send_settings_updated_at` report write-path readiness only. They are not
-  required for read-only archive search, but a missing cache explains why an
-  explicitly authorized send may fail before reaching the phone.
+  required for read-only archive search. If the user is preparing to send from
+  gmcli, tell them `gmcli sync send-settings` can inspect or refresh the
+  preferred Settings/SIM metadata path; `send text` can still fall back to the
+  older minimal request shape and only reports success after a phone echo.
 
 `last_event_time` is the newest archived message timestamp. It is normal for
 it to be old when no one has texted the user recently. If older history is

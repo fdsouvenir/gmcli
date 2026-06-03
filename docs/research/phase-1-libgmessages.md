@@ -318,3 +318,23 @@ Phase 2 should treat this as the starting skeleton for the `gmcli sync` and
 This branch carries only the research doc. Phase 2 (scaffolding the Go
 module, LICENSE, README, libgm wrapper, SQLite store, and the auth/sync
 commands) should land on a separate feature branch once this is reviewed.
+
+## 11. Send settings diagnostics and fallback
+
+Follow-up live inspection on June 3, 2026 found that the recurring upstream
+unknown event is not the `gmproto.Settings`/SIM metadata used by the richer
+Google Messages send request shape. Reports should stay redacted: event type,
+field numbers, byte lengths, counts, and timestamps are useful; payload blobs
+are not.
+
+gmcli now has `gmcli sync send-settings`, a read-only network diagnostic that
+opens the paired session, registers the sync pump, calls `SetActiveSession`
+through `RequestUpdates`, and waits for a real `*gmproto.Settings` event before
+marking send readiness. A live run on June 3, 2026 successfully requested the
+refresh but did not receive Settings within the 60 second diagnostic window.
+
+Because earlier gmcli sends worked with a minimal request shape, missing
+Settings should not remain a hard blocker. The send path should prefer real
+`Settings.SIMCards` when available, never synthesize SIM metadata, and fall
+back to the legacy request shape when Settings are unavailable. Success should
+still require the phone to echo the outgoing message.
