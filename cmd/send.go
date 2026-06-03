@@ -24,11 +24,24 @@ const readyTimeout = 30 * time.Second
 func sendCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "send",
-		Short: "Send messages and reactions (requires --read-only=false)",
+		Short: "Send messages, reactions, and inspect send readiness",
 	}
 	c.AddCommand(sendTextCmd())
 	c.AddCommand(sendReactCmd())
+	c.AddCommand(sendPreflightCmd())
 	return c
+}
+
+type sendPreflightResult struct {
+	Connected                bool      `json:"connected"`
+	RequestedActiveSession   bool      `json:"requested_active_session"`
+	PhoneDefaultSMSApp       bool      `json:"phone_default_sms_app"`
+	SendSettingsCached       bool      `json:"send_settings_cached"`
+	SendSettingsSIMCount     int       `json:"send_settings_sim_count,omitempty"`
+	SendSettingsUpdated      time.Time `json:"send_settings_updated_at,omitempty"`
+	CachedSettingsDefaultSMS *bool     `json:"cached_settings_default_sms_app,omitempty"`
+	SendReady                bool      `json:"send_ready"`
+	Issues                   []string  `json:"issues,omitempty"`
 }
 
 func sendTextCmd() *cobra.Command {
@@ -86,6 +99,131 @@ func sendTextResultJSON(res *gm.SendTextResult) map[string]any {
 		"message_id":      res.MessageID,
 		"tmp_id":          res.TmpID,
 		"send_mode":       res.SendMode,
+	}
+}
+
+func sendPreflightCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "preflight",
+		Short: "Check live phone state needed before sending",
+		Long: "Open the paired Google Messages session and check live send readiness " +
+			"without sending SMS. This command is read-only; it may refresh local " +
+			"Settings/SIM metadata in the gmcli store.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := runSendPreflight()
+			if flags.jsonOut {
+				if renderErr := output.JSON(os.Stdout, res); renderErr != nil {
+					return renderErr
+				}
+			} else {
+				renderSendPreflight(res)
+			}
+			if err != nil {
+				return err
+			}
+			if !res.SendReady {
+				return fmt.Errorf("send preflight failed")
+			}
+			return nil
+		},
+	}
+}
+
+func runSendPreflight() (sendPreflightResult, error) {
+	layout, err := resolveLayout()
+	if err != nil {
+		return sendPreflightResult{}, err
+	}
+	logger := newLogger()
+
+	ctx, cancel := signalContext(context.Background())
+	defer cancel()
+	ctx, cancelTimeout := context.WithTimeout(ctx, 2*readyTimeout)
+	defer cancelTimeout()
+
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		return sendPreflightResult{}, fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+
+	res := sendPreflightResult{}
+	if cached, err := st.LatestPhoneSettings(ctx); err == nil {
+		res.SendSettingsCached = true
+		res.SendSettingsSIMCount = cached.SIMCount
+		res.SendSettingsUpdated = cached.UpdatedAt
+		if cachedDefault, ok := cachedDefaultSMSApp(cached.RawProto); ok {
+			res.CachedSettingsDefaultSMS = &cachedDefault
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return res, fmt.Errorf("read cached send settings: %w", err)
+	}
+
+	client, err := gm.Open(layout, logger)
+	if err != nil {
+		return res, err
+	}
+	pump := gmsync.New(st, logger)
+	client.Subscribe(pump.Handle)
+
+	if err := client.Connect(); err != nil {
+		return res, fmt.Errorf("connect: %w", err)
+	}
+	defer client.Disconnect()
+	if err := waitForConnected(ctx, client); err != nil {
+		return res, err
+	}
+	res.Connected = true
+	if err := client.RequestUpdates(); err != nil {
+		return res, fmt.Errorf("set active Google Messages session: %w", err)
+	}
+	res.RequestedActiveSession = true
+	defaultSMS, err := client.IsDefaultSMSApp()
+	if err != nil {
+		return res, fmt.Errorf("check Google Messages default SMS app state: %w", err)
+	}
+	res.PhoneDefaultSMSApp = defaultSMS
+	res.SendReady = defaultSMS
+	if !defaultSMS {
+		res.Issues = append(res.Issues, "phone reports Google Messages is not the default SMS app")
+	}
+	return res, nil
+}
+
+func cachedDefaultSMSApp(raw []byte) (bool, bool) {
+	settings := &gmproto.Settings{}
+	if err := proto.Unmarshal(raw, settings); err != nil {
+		return false, false
+	}
+	if settings.GetRCSSettings() == nil {
+		return false, false
+	}
+	return settings.GetRCSSettings().GetIsDefaultSMSApp(), true
+}
+
+func renderSendPreflight(res sendPreflightResult) {
+	fmt.Println("gmcli send preflight")
+	fmt.Println("====================")
+	fmt.Printf("  connected:              %v\n", res.Connected)
+	fmt.Printf("  requested active:       %v\n", res.RequestedActiveSession)
+	fmt.Printf("  phone default SMS app:  %v\n", res.PhoneDefaultSMSApp)
+	fmt.Printf("  send settings cached:   %v\n", res.SendSettingsCached)
+	if res.SendSettingsCached {
+		fmt.Printf("  send settings SIMs:     %d\n", res.SendSettingsSIMCount)
+		if res.CachedSettingsDefaultSMS != nil {
+			fmt.Printf("  cached default SMS app: %v\n", *res.CachedSettingsDefaultSMS)
+		}
+		if res.SendSettingsUpdated.UnixMilli() > 0 {
+			fmt.Printf("  send settings updated:  %s\n", res.SendSettingsUpdated.Format(time.RFC3339))
+		}
+	}
+	fmt.Printf("  send ready:             %v\n", res.SendReady)
+	if len(res.Issues) > 0 {
+		fmt.Println()
+		fmt.Println("Issues:")
+		for _, issue := range res.Issues {
+			fmt.Printf("  - %s\n", issue)
+		}
 	}
 }
 

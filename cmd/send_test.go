@@ -83,3 +83,25 @@ func TestSendTextResultJSONIncludesSendMode(t *testing.T) {
 		t.Fatalf("send mode: got %#v want %q", got["send_mode"], gm.SendModeLegacy)
 	}
 }
+
+func TestCachedDefaultSMSApp(t *testing.T) {
+	settings := &gmproto.Settings{
+		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: true},
+	}
+	raw, err := proto.Marshal(settings)
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	got, ok := cachedDefaultSMSApp(raw)
+	if !ok {
+		t.Fatalf("expected cached default SMS field")
+	}
+	if !got {
+		t.Fatalf("cached default SMS app: got false want true")
+	}
+
+	got, ok = cachedDefaultSMSApp([]byte("not a proto"))
+	if ok || got {
+		t.Fatalf("invalid proto: got (%v, %v), want (false, false)", got, ok)
+	}
+}
