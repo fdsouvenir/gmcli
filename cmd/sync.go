@@ -24,7 +24,7 @@ type sendSettingsRefreshClient interface {
 	Subscribe(gm.EventHandler)
 	Connect() error
 	Disconnect()
-	WaitForReady(context.Context) error
+	IsConnected() bool
 	RequestUpdates() error
 	WaitForSettings(context.Context) error
 }
@@ -204,24 +204,13 @@ func runSendSettingsRefresh(ctx context.Context, client sendSettingsRefreshClien
 	pump := gmsync.New(st, logger)
 	client.Subscribe(pump.Handle)
 
-	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
-	defer cancelReady()
-	ready := make(chan error, 1)
-	go func() { ready <- client.WaitForReady(readyCtx) }()
-
 	if err := client.Connect(); err != nil {
 		return res, fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
 
-	select {
-	case err := <-ready:
-		if err != nil {
-			return res, fmt.Errorf("wait for ready: %w", err)
-		}
-	default:
-		// Connect normally returns after ClientReady. If the event arrived
-		// before this select, the active session is already usable.
+	if err := waitForRefreshClientConnected(ctx, client); err != nil {
+		return res, err
 	}
 
 	if err := client.RequestUpdates(); err != nil {
@@ -262,6 +251,21 @@ func runSendSettingsRefresh(ctx context.Context, client sendSettingsRefreshClien
 	default:
 	}
 	return res, nil
+}
+
+func waitForRefreshClientConnected(ctx context.Context, client sendSettingsRefreshClient) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if client.IsConnected() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for Google Messages long-poll connection: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func renderSendSettingsRefresh(res sendSettingsRefreshResult) {

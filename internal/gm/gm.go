@@ -49,6 +49,7 @@ type EventHandler func(evt any)
 type SendMode string
 
 const (
+	SendModeAuto     SendMode = "auto"
 	SendModeSettings SendMode = "settings"
 	SendModeLegacy   SendMode = "legacy"
 )
@@ -64,6 +65,7 @@ type Client struct {
 	mu          sync.RWMutex
 	subscribers []EventHandler
 	settings    *gmproto.Settings
+	ready       bool
 
 	sendMessageHook     func(*gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error)
 	getConversationHook func(string) (*gmproto.Conversation, error)
@@ -103,12 +105,18 @@ func (c *Client) Subscribe(h EventHandler) {
 // immediately. Returns when the initial sync completes; the connection
 // continues running in a background goroutine inside libgm.
 func (c *Client) Connect() error {
+	c.mu.Lock()
+	c.ready = false
+	c.mu.Unlock()
 	return c.libgm.Connect()
 }
 
 // Disconnect closes the long-poll. Safe to call multiple times.
 func (c *Client) Disconnect() {
 	c.libgm.Disconnect()
+	c.mu.Lock()
+	c.ready = false
+	c.mu.Unlock()
 }
 
 // IsConnected reports whether the long-poll is currently active.
@@ -124,9 +132,10 @@ func (c *Client) IsConnected() bool {
 // Subscribe(c.WaitForReady...) is not the right idiom — this method
 // installs and removes a single-fire subscriber for you.
 func (c *Client) WaitForReady(ctx context.Context) error {
-	if c.libgm.IsConnected() {
-		// Already ready — but ClientReady has likely already fired and
-		// won't repeat. Best effort: return immediately.
+	c.mu.RLock()
+	isReady := c.ready
+	c.mu.RUnlock()
+	if isReady {
 		return nil
 	}
 	ready := make(chan struct{}, 1)
@@ -139,6 +148,9 @@ func (c *Client) WaitForReady(ctx context.Context) error {
 			fired.Do(func() { close(ready) })
 		}
 	})
+	if c.ready {
+		fired.Do(func() { close(ready) })
+	}
 	c.mu.Unlock()
 
 	defer func() {
@@ -182,6 +194,15 @@ func (c *Client) RequestUpdates() error {
 	return c.libgm.SetActiveSession()
 }
 
+// IsDefaultSMSApp asks the phone whether Google Messages is the default SMS app.
+func (c *Client) IsDefaultSMSApp() (bool, error) {
+	resp, err := c.libgm.IsBugleDefault()
+	if err != nil {
+		return false, err
+	}
+	return resp.GetSuccess(), nil
+}
+
 // SendTextResult describes a successful send.
 type SendTextResult struct {
 	MessageID      string
@@ -195,18 +216,46 @@ type SendTextResult struct {
 // recipient's client. The libgm long-poll must be Connected; call
 // WaitForReady first for fresh sessions.
 func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID string) (*SendTextResult, error) {
+	return c.SendTextWithMode(ctx, conversationID, body, replyToID, SendModeAuto)
+}
+
+// SendTextWithMode is SendText with an explicit request-shape selection.
+// SendModeAuto prefers Settings/SIM metadata, falls back to legacy when
+// Settings are unavailable, and retries legacy when the phone rejects a
+// settings-mode attempt with UNKNOWN.
+func (c *Client) SendTextWithMode(ctx context.Context, conversationID, body, replyToID string, requested SendMode) (*SendTextResult, error) {
 	if conversationID == "" {
 		return nil, fmt.Errorf("conversation id is required")
 	}
 	if body == "" {
 		return nil, fmt.Errorf("message body is required")
 	}
+	if !validRequestedSendMode(requested) {
+		return nil, fmt.Errorf("unknown send mode %q", requested)
+	}
 	tmpID := uuid.NewString()
-	req, mode, err := c.buildSendTextRequest(ctx, conversationID, body, replyToID, tmpID)
+	req, mode, err := c.buildSendTextRequest(ctx, conversationID, body, replyToID, tmpID, requested)
 	if err != nil {
 		return nil, err
 	}
-	waitEcho, unsubscribe := c.watchMessageEcho(tmpID)
+	res, err := c.sendBuiltText(ctx, req, mode)
+	if err == nil {
+		return res, nil
+	}
+	var rejected sendRejectedError
+	if requested == SendModeAuto && mode == SendModeSettings && errors.As(err, &rejected) && rejected.status == gmproto.SendMessageResponse_UNKNOWN {
+		legacyReq := buildLegacySendTextRequest(conversationID, body, replyToID, uuid.NewString())
+		legacyRes, legacyErr := c.sendBuiltText(ctx, legacyReq, SendModeLegacy)
+		if legacyErr != nil {
+			return nil, fmt.Errorf("%w; legacy fallback failed: %w", err, legacyErr)
+		}
+		return legacyRes, nil
+	}
+	return nil, err
+}
+
+func (c *Client) sendBuiltText(ctx context.Context, req *gmproto.SendMessageRequest, mode SendMode) (*SendTextResult, error) {
+	waitEcho, unsubscribe := c.watchMessageEcho(req.GetTmpID())
 	defer unsubscribe()
 
 	resp, err := c.sendMessage(req)
@@ -214,22 +263,47 @@ func (c *Client) SendText(ctx context.Context, conversationID, body, replyToID s
 		return nil, fmt.Errorf("libgm send: %w", err)
 	}
 	if resp.GetStatus() != gmproto.SendMessageResponse_SUCCESS {
-		return nil, fmt.Errorf("send rejected by phone: %s", sendStatusMessage(resp))
+		return nil, sendRejectedError{
+			status:  resp.GetStatus(),
+			message: sendStatusMessage(resp),
+		}
 	}
 
 	echo, err := waitEcho(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("send accepted by phone, but no sent-message echo arrived for tmp_id %s: %w", tmpID, err)
+		return nil, fmt.Errorf("send accepted by phone, but no sent-message echo arrived for tmp_id %s: %w", req.GetTmpID(), err)
 	}
 	return &SendTextResult{
 		MessageID:      echo.Message.GetMessageID(),
 		ConversationID: echo.Message.GetConversationID(),
-		TmpID:          tmpID,
+		TmpID:          req.GetTmpID(),
 		SendMode:       mode,
 	}, nil
 }
 
-func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, SendMode, error) {
+type sendRejectedError struct {
+	status  gmproto.SendMessageResponse_Status
+	message string
+}
+
+func (e sendRejectedError) Error() string {
+	return fmt.Sprintf("send rejected by phone: %s", e.message)
+}
+
+func validRequestedSendMode(mode SendMode) bool {
+	switch mode {
+	case SendModeAuto, SendModeSettings, SendModeLegacy:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body, replyToID, tmpID string, requested SendMode) (*gmproto.SendMessageRequest, SendMode, error) {
+	if requested == SendModeLegacy {
+		return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
+	}
+
 	settingsCtx, cancel := context.WithTimeout(ctx, c.sendMetadataWaitDuration())
 	defer cancel()
 	if err := c.WaitForSettings(settingsCtx); err != nil {
@@ -237,6 +311,9 @@ func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body,
 			return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			if requested == SendModeSettings {
+				return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
+			}
 			return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
 		}
 		return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
@@ -244,6 +321,9 @@ func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body,
 
 	req, err := c.buildSettingsSendTextRequest(conversationID, body, replyToID, tmpID)
 	if err != nil {
+		if requested == SendModeSettings {
+			return nil, "", err
+		}
 		c.logger.Debug().Err(err).Msg("Falling back to legacy send request")
 		return buildLegacySendTextRequest(conversationID, body, replyToID, tmpID), SendModeLegacy, nil
 	}
@@ -503,6 +583,10 @@ func (c *Client) dispatch(evt any) {
 		if err := saveAuth(c.layout.Session, c.auth); err != nil {
 			c.logger.Error().Err(err).Msg("Failed to persist refreshed auth data")
 		}
+	case *events.ClientReady:
+		c.mu.Lock()
+		c.ready = true
+		c.mu.Unlock()
 	case *gmproto.Settings:
 		c.mu.Lock()
 		c.settings = e

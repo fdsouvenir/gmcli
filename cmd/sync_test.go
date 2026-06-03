@@ -156,6 +156,10 @@ func (f *fakeSettingsClient) Connect() error {
 
 func (f *fakeSettingsClient) Disconnect() {}
 
+func (f *fakeSettingsClient) IsConnected() bool {
+	return true
+}
+
 func (f *fakeSettingsClient) WaitForReady(context.Context) error {
 	return nil
 }

@@ -32,7 +32,7 @@ func sendCmd() *cobra.Command {
 }
 
 func sendTextCmd() *cobra.Command {
-	var to, message, replyTo string
+	var to, message, replyTo, sendMode string
 	c := &cobra.Command{
 		Use:   "text",
 		Short: "Send a text message into a conversation",
@@ -58,7 +58,7 @@ func sendTextCmd() *cobra.Command {
 						return fmt.Errorf("request phone send settings refresh: %w", err)
 					}
 				}
-				res, err := c.SendText(ctx, to, message, replyTo)
+				res, err := c.SendTextWithMode(ctx, to, message, replyTo, gm.SendMode(sendMode))
 				if err != nil {
 					return err
 				}
@@ -75,6 +75,7 @@ func sendTextCmd() *cobra.Command {
 	c.Flags().StringVar(&to, "to", "", "conversation_id (find one via `gmcli chats list`)")
 	c.Flags().StringVar(&message, "message", "", "message body")
 	c.Flags().StringVar(&replyTo, "reply-to", "", "optional message_id to quote-reply to")
+	c.Flags().StringVar(&sendMode, "send-mode", string(gm.SendModeAuto), "request shape: auto, settings, or legacy")
 	return c
 }
 
@@ -186,23 +187,39 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	pump := gmsync.New(st, logger)
 	client.Subscribe(pump.Handle)
 
-	ready := make(chan error, 1)
-	go func() { ready <- client.WaitForReady(ctx) }()
-
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
 
-	select {
-	case err := <-ready:
-		if err != nil {
-			return fmt.Errorf("wait for ready: %w", err)
-		}
-	default:
-		// Some libgm paths return from Connect after the ready event has
-		// already fired. In that case the session is usable.
+	if err := waitForConnected(ctx, client); err != nil {
+		return err
+	}
+	if err := client.RequestUpdates(); err != nil {
+		return fmt.Errorf("set active Google Messages session: %w", err)
+	}
+	defaultSMS, err := client.IsDefaultSMSApp()
+	if err != nil {
+		return fmt.Errorf("check Google Messages default SMS app state: %w", err)
+	}
+	if !defaultSMS {
+		return fmt.Errorf("phone reports Google Messages is not the default SMS app; set Google Messages as the default SMS app on the phone and retry")
 	}
 
 	return fn(ctx, client, st)
+}
+
+func waitForConnected(ctx context.Context, client *gm.Client) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if client.IsConnected() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for Google Messages long-poll connection: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }

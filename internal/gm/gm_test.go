@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
 
@@ -58,6 +59,17 @@ func TestSetSettingsUnblocksWaitForSettingsAndFindsSIM(t *testing.T) {
 	}
 	if sim.GetSIMData().GetSIMPayload().GetSIMNumber() != 1 {
 		t.Fatalf("unexpected SIM payload: %+v", sim.GetSIMData().GetSIMPayload())
+	}
+}
+
+func TestWaitForReadyReturnsAfterAlreadyReady(t *testing.T) {
+	c := &Client{}
+	c.dispatch(&events.ClientReady{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := c.WaitForReady(ctx); err != nil {
+		t.Fatalf("wait for ready after event: %v", err)
 	}
 }
 
@@ -176,6 +188,84 @@ func TestSendTextFallsBackToLegacyModeWhenSettingsTimeout(t *testing.T) {
 	}
 }
 
+func TestSendTextForcedLegacyModeIgnoresAvailableSettings(t *testing.T) {
+	c := &Client{}
+	c.SetSettings(testSettings("sender-1"))
+	c.sendMessageHook = func(req *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+		if req.GetSIMPayload() != nil {
+			t.Fatalf("forced legacy should omit SIM payload")
+		}
+		if req.GetMessagePayload().GetMessagePayloadContent() == nil {
+			t.Fatalf("forced legacy should use messagePayloadContent")
+		}
+		c.dispatch(&libgm.WrappedMessage{Message: &gmproto.Message{
+			MessageID:      "msg-forced-legacy",
+			ConversationID: req.GetConversationID(),
+			TmpID:          req.GetTmpID(),
+		}})
+		return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_SUCCESS}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := c.SendTextWithMode(ctx, "conv-1", "hello", "", SendModeLegacy)
+	if err != nil {
+		t.Fatalf("send text: %v", err)
+	}
+	if res.SendMode != SendModeLegacy {
+		t.Fatalf("send mode: got %q want %q", res.SendMode, SendModeLegacy)
+	}
+}
+
+func TestSendTextAutoRetriesLegacyWhenSettingsRejectedUnknown(t *testing.T) {
+	c := &Client{
+		getConversationHook: func(string) (*gmproto.Conversation, error) {
+			return &gmproto.Conversation{DefaultOutgoingID: "sender-1"}, nil
+		},
+	}
+	c.SetSettings(testSettings("sender-1"))
+	calls := 0
+	c.sendMessageHook = func(req *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+		calls++
+		switch calls {
+		case 1:
+			if req.GetSIMPayload() == nil {
+				t.Fatalf("first auto attempt should use settings request")
+			}
+			return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_UNKNOWN}, nil
+		case 2:
+			if req.GetSIMPayload() != nil {
+				t.Fatalf("legacy retry should omit SIM payload")
+			}
+			c.dispatch(&libgm.WrappedMessage{Message: &gmproto.Message{
+				MessageID:      "msg-retry",
+				ConversationID: req.GetConversationID(),
+				TmpID:          req.GetTmpID(),
+			}})
+			return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_SUCCESS}, nil
+		default:
+			t.Fatalf("unexpected send call %d", calls)
+			return nil, nil
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := c.SendText(ctx, "conv-1", "hello", "")
+	if err != nil {
+		t.Fatalf("send text: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("send calls: got %d want 2", calls)
+	}
+	if res.SendMode != SendModeLegacy {
+		t.Fatalf("send mode: got %q want %q", res.SendMode, SendModeLegacy)
+	}
+	if res.MessageID != "msg-retry" {
+		t.Fatalf("message id: got %q want msg-retry", res.MessageID)
+	}
+}
+
 func TestSendTextDoesNotFallbackAfterParentContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -208,6 +298,12 @@ func TestSendTextRequiresEchoInLegacyMode(t *testing.T) {
 	defer cancel()
 	if _, err := c.SendText(ctx, "conv-1", "hello", ""); err == nil {
 		t.Fatalf("expected missing echo error")
+	}
+}
+
+func TestSendTextRejectsUnknownSendMode(t *testing.T) {
+	if _, err := (&Client{}).SendTextWithMode(context.Background(), "conv-1", "hello", "", SendMode("bogus")); err == nil {
+		t.Fatalf("expected unknown send mode error")
 	}
 }
 
