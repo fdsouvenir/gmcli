@@ -29,6 +29,7 @@ func sendCmd() *cobra.Command {
 	c.AddCommand(sendTextCmd())
 	c.AddCommand(sendReactCmd())
 	c.AddCommand(sendPreflightCmd())
+	c.AddCommand(sendInspectCmd())
 	return c
 }
 
@@ -43,6 +44,33 @@ type sendPreflightResult struct {
 	CachedSettingsDefaultSMS *bool     `json:"cached_settings_default_sms_app,omitempty"`
 	SendReady                bool      `json:"send_ready"`
 	Issues                   []string  `json:"issues,omitempty"`
+}
+
+type sendInspectResult struct {
+	ConversationID          string               `json:"conversation_id"`
+	Type                    string               `json:"type"`
+	TypeValue               int32                `json:"type_value"`
+	ConversationTypeRPC     int32                `json:"conversation_type_rpc,omitempty"`
+	ConversationTypeRPCBool bool                 `json:"conversation_type_rpc_bool,omitempty"`
+	ConversationTypeRPCNum  int32                `json:"conversation_type_rpc_number,omitempty"`
+	SendMode                string               `json:"send_mode"`
+	SendModeValue           int32                `json:"send_mode_value"`
+	DefaultOutgoingID       string               `json:"default_outgoing_id,omitempty"`
+	ReadOnly                bool                 `json:"read_only"`
+	IsGroupChat             bool                 `json:"is_group_chat"`
+	ParticipantIDs          []string             `json:"participant_ids,omitempty"`
+	OtherParticipantIDs     []string             `json:"other_participant_ids,omitempty"`
+	SendSettingsCached      bool                 `json:"send_settings_cached"`
+	SendSettingsSIMCount    int                  `json:"send_settings_sim_count,omitempty"`
+	SendSettingsUpdated     time.Time            `json:"send_settings_updated_at,omitempty"`
+	SendSettingsSIMs        []sendInspectSIMInfo `json:"send_settings_sims,omitempty"`
+	SettingsRequestForceRCS bool                 `json:"settings_request_force_rcs"`
+}
+
+type sendInspectSIMInfo struct {
+	ParticipantID string `json:"participant_id,omitempty"`
+	HasPayload    bool   `json:"has_payload"`
+	RCSEnabled    bool   `json:"rcs_enabled"`
 }
 
 func sendTextCmd() *cobra.Command {
@@ -101,6 +129,153 @@ func sendTextResultJSON(res *gm.SendTextResult) map[string]any {
 		"tmp_id":          res.TmpID,
 		"send_mode":       res.SendMode,
 	}
+}
+
+func sendInspectCmd() *cobra.Command {
+	var to string
+	c := &cobra.Command{
+		Use:   "inspect",
+		Short: "Inspect live send metadata for a conversation",
+		Long: "Open the paired Google Messages session and inspect sanitized live send metadata " +
+			"for a conversation without sending SMS.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if to == "" {
+				return fmt.Errorf("--to is required")
+			}
+			res, err := runSendInspect(to)
+			if flags.jsonOut {
+				if renderErr := output.JSON(os.Stdout, res); renderErr != nil {
+					return renderErr
+				}
+			} else {
+				renderSendInspect(res)
+			}
+			return err
+		},
+	}
+	c.Flags().StringVar(&to, "to", "", "conversation_id (find one via `gmcli chats list`)")
+	return c
+}
+
+func runSendInspect(conversationID string) (sendInspectResult, error) {
+	layout, err := resolveLayout()
+	if err != nil {
+		return sendInspectResult{}, err
+	}
+	logger := newLogger()
+
+	ctx, cancel := signalContext(context.Background())
+	defer cancel()
+	ctx, cancelTimeout := context.WithTimeout(ctx, 2*readyTimeout)
+	defer cancelTimeout()
+
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		return sendInspectResult{}, fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+
+	res := sendInspectResult{ConversationID: conversationID}
+	var settings *gmproto.Settings
+	if cached, err := st.LatestPhoneSettings(ctx); err == nil {
+		res.SendSettingsCached = true
+		res.SendSettingsSIMCount = cached.SIMCount
+		res.SendSettingsUpdated = cached.UpdatedAt
+		settings = &gmproto.Settings{}
+		if err := proto.Unmarshal(cached.RawProto, settings); err != nil {
+			return res, fmt.Errorf("decode cached phone send settings: %w", err)
+		}
+		for _, sim := range settings.GetSIMCards() {
+			res.SendSettingsSIMs = append(res.SendSettingsSIMs, sendInspectSIMInfo{
+				ParticipantID: sim.GetSIMParticipant().GetID(),
+				HasPayload:    sim.GetSIMData().GetSIMPayload() != nil,
+				RCSEnabled:    sim.GetRCSChats().GetEnabled(),
+			})
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return res, fmt.Errorf("read cached send settings: %w", err)
+	}
+
+	client, err := gm.Open(layout, logger)
+	if err != nil {
+		return res, err
+	}
+	if err := client.Connect(); err != nil {
+		return res, fmt.Errorf("connect: %w", err)
+	}
+	defer client.Disconnect()
+	if err := waitForConnected(ctx, client); err != nil {
+		return res, err
+	}
+	if err := client.RequestUpdates(); err != nil {
+		return res, fmt.Errorf("set active Google Messages session: %w", err)
+	}
+
+	conv, err := client.Underlying().GetConversation(conversationID)
+	if err != nil {
+		return res, fmt.Errorf("get conversation %s: %w", conversationID, err)
+	}
+	typeResp, err := client.Underlying().GetConversationType(conversationID)
+	if err != nil {
+		return res, fmt.Errorf("get conversation type %s: %w", conversationID, err)
+	}
+	res.Type = conv.GetType().String()
+	res.TypeValue = int32(conv.GetType())
+	res.ConversationTypeRPC = typeResp.GetType()
+	res.ConversationTypeRPCBool = typeResp.GetBool1()
+	res.ConversationTypeRPCNum = typeResp.GetNumber2()
+	res.SendMode = conv.GetSendMode().String()
+	res.SendModeValue = int32(conv.GetSendMode())
+	res.DefaultOutgoingID = conv.GetDefaultOutgoingID()
+	res.ReadOnly = conv.GetReadOnly()
+	res.IsGroupChat = conv.GetIsGroupChat()
+	for _, participant := range conv.GetParticipants() {
+		if id := participant.GetID().GetParticipantID(); id != "" {
+			res.ParticipantIDs = append(res.ParticipantIDs, id)
+		}
+	}
+	res.OtherParticipantIDs = append(res.OtherParticipantIDs, conv.GetOtherParticipants()...)
+	res.SettingsRequestForceRCS = conv.GetType() == gmproto.ConversationType_RCS &&
+		conv.GetSendMode() == gmproto.ConversationSendMode_SEND_MODE_AUTO &&
+		settingsRCSAvailable(settings, res.DefaultOutgoingID)
+	return res, nil
+}
+
+func settingsRCSAvailable(settings *gmproto.Settings, participantID string) bool {
+	if settings == nil {
+		return false
+	}
+	for _, sim := range settings.GetSIMCards() {
+		if participantID != "" && sim.GetSIMParticipant().GetID() != participantID {
+			continue
+		}
+		if sim.GetRCSChats().GetEnabled() {
+			return true
+		}
+	}
+	return false
+}
+
+func renderSendInspect(res sendInspectResult) {
+	fmt.Println("gmcli send inspect")
+	fmt.Println("==================")
+	fmt.Printf("  conversation id:        %s\n", res.ConversationID)
+	fmt.Printf("  type:                   %s (%d)\n", res.Type, res.TypeValue)
+	fmt.Printf("  type RPC:               %d (bool %v, number %d)\n", res.ConversationTypeRPC, res.ConversationTypeRPCBool, res.ConversationTypeRPCNum)
+	fmt.Printf("  send mode:              %s (%d)\n", res.SendMode, res.SendModeValue)
+	fmt.Printf("  default outgoing id:    %s\n", res.DefaultOutgoingID)
+	fmt.Printf("  read only:              %v\n", res.ReadOnly)
+	fmt.Printf("  group chat:             %v\n", res.IsGroupChat)
+	fmt.Printf("  participant ids:        %v\n", res.ParticipantIDs)
+	fmt.Printf("  other participant ids:  %v\n", res.OtherParticipantIDs)
+	fmt.Printf("  send settings cached:   %v\n", res.SendSettingsCached)
+	if res.SendSettingsCached {
+		fmt.Printf("  send settings SIMs:     %d\n", res.SendSettingsSIMCount)
+		for _, sim := range res.SendSettingsSIMs {
+			fmt.Printf("    - participant %s, payload %v, RCS %v\n", sim.ParticipantID, sim.HasPayload, sim.RCSEnabled)
+		}
+	}
+	fmt.Printf("  request force RCS:      %v\n", res.SettingsRequestForceRCS)
 }
 
 func sendPreflightCmd() *cobra.Command {
@@ -329,12 +504,18 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	pump := gmsync.New(st, logger)
 	client.Subscribe(pump.Handle)
 
+	ready := make(chan error, 1)
+	go func() { ready <- client.WaitForReady(ctx) }()
+
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer client.Disconnect()
 
 	if err := waitForConnected(ctx, client); err != nil {
+		return err
+	}
+	if err := waitForReadySignal(ctx, ready); err != nil {
 		return err
 	}
 	if err := client.RequestUpdates(); err != nil {
@@ -348,6 +529,18 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	}
 
 	return fn(ctx, client, st)
+}
+
+func waitForReadySignal(ctx context.Context, ready <-chan error) error {
+	select {
+	case err := <-ready:
+		if err != nil {
+			return fmt.Errorf("wait for ready: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for ready: %w", ctx.Err())
+	}
 }
 
 func waitForConnected(ctx context.Context, client *gm.Client) error {
