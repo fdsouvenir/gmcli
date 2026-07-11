@@ -233,3 +233,53 @@ func TestMessagesListFilters(t *testing.T) {
 		t.Fatalf("expected 4 messages in c_alice, got %d", len(msgs))
 	}
 }
+
+func TestExportJSON(t *testing.T) {
+	dir := seedStore(t)
+	out := filepath.Join(t.TempDir(), "archive.json")
+	resultJSON := runCmd(t, dir, "--json", "export", "json", "--out", out)
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		t.Fatalf("result json: %v\n%s", err, resultJSON)
+	}
+	if result["messages"] != float64(5) {
+		t.Fatalf("expected 5 exported messages, got %#v", result["messages"])
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	var snapshot struct {
+		Format        string `json:"format"`
+		Conversations []struct {
+			Participants []map[string]any `json:"participants"`
+		} `json:"conversations"`
+		Messages []map[string]any `json:"messages"`
+		Contacts []map[string]any `json:"contacts"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("archive json: %v\n%s", err, data)
+	}
+	if snapshot.Format != "gmcli-json-archive" || len(snapshot.Conversations) != 2 || len(snapshot.Messages) != 5 || len(snapshot.Contacts) != 3 {
+		t.Fatalf("unexpected archive contents: format=%q conversations=%d messages=%d contacts=%d",
+			snapshot.Format, len(snapshot.Conversations), len(snapshot.Messages), len(snapshot.Contacts))
+	}
+	if len(snapshot.Conversations[0].Participants) == 0 {
+		t.Fatal("participants should be nested JSON, not a JSON-encoded string")
+	}
+	serialized := string(data)
+	for _, forbidden := range []string{"decryption_key", "raw_proto", "AQID"} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("export leaked %q", forbidden)
+		}
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("stat export: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("export mode = %o, want 600", info.Mode().Perm())
+	}
+}

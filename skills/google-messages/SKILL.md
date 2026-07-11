@@ -155,6 +155,18 @@ archive when a focused query will do.
    gmcli --json --read-only messages show {message_id}
    ```
 
+8. **Export a point-in-time JSON backup.** Only do this when the user
+   explicitly asks for an archive export, and use a user-approved path:
+
+   ```
+   gmcli --json --read-only export json --out '{path}'
+   ```
+
+   The output is one JSON document containing all conversations, messages,
+   contacts, and aliases. It excludes media decryption keys, raw protocol
+   buffers, and downloaded media bytes. The command refuses to overwrite an
+   existing file unless the user explicitly authorizes `--force`.
+
 ### Health check
 
 If results are unexpectedly empty or the user mentions a recent message you

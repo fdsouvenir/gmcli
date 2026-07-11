@@ -45,6 +45,18 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 Requires Go 1.25 or newer.
 
+With Nix, run gmcli directly or install the default flake package:
+
+```sh
+nix run github:fdsouvenir/gmcli -- --help
+nix profile install github:fdsouvenir/gmcli
+```
+
+The flake publishes `packages.<system>.gmcli`, a default package and app, and
+`overlays.default` for NixOS or nix-darwin configurations.
+
+To build from source without Nix:
+
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
 cd gmcli
@@ -100,6 +112,10 @@ gmcli messages context <message-id>           # surrounding messages
 gmcli contacts search alice                   # name/number/alias substring match
 gmcli contacts show <participant-id-or-num>   # contact detail
 
+# Export the complete local archive as one portable JSON document. This is a
+# point-in-time snapshot; run it again after syncing to refresh your backup.
+gmcli export json --out ~/Backups/gmcli-messages.json
+
 # 4. Local-only labels.
 gmcli contacts alias set --id <pid> --alias "Mom"
 gmcli contacts alias list                     # list all set aliases
@@ -144,8 +160,9 @@ gmcli --json chats list | jq '.[0].name'
 
 ```
 cmd/                  Cobra command tree (auth, sync, version, doctor,
-                      messages, contacts, chats, send, media)
+                      messages, contacts, chats, send, media, export)
 internal/
+  archive/             Portable JSON snapshot export
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
   store/              SQLite + FTS5 store (schema v3: aliases + send settings cache)
@@ -175,6 +192,9 @@ by default.
 - Media attachments are referenced by ID in the database; bytes are not
   downloaded by default. Use `gmcli media download --message <message-id>`
   for explicit downloads.
+- `gmcli export json` writes message and contact data with mode 0600 and omits
+  media decryption keys and raw protocol buffers. It does not embed downloaded
+  media files. Protect exported files as carefully as the SQLite database.
 - The SQLite file is unencrypted. If you need at-rest encryption, layer your
   own filesystem encryption (FileVault, LUKS, etc.).
 
