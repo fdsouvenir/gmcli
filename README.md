@@ -30,10 +30,12 @@ shell use and LLM tool integrations.
 
 ## How it works
 
-`pkg/libgm` reverse-engineers the Google Messages web client protocol. After a
-one-time QR pairing handshake, it maintains an authenticated session with
-your paired phone — all messages flow through the phone, which proxies them
-to Google's relay infrastructure. gmcli wraps that session with an event loop
+`pkg/libgm` reverse-engineers the Google Messages web client protocol. gmcli
+uses Google Account (Gaia) pairing: it validates browser-exported Google
+cookies, shows the matching emoji, and waits for confirmation in Google
+Messages on the phone. After pairing it maintains an authenticated session
+with the phone — all messages flow through the phone, which proxies them to
+Google's relay infrastructure. gmcli wraps that session with an event loop
 that writes incoming messages, conversation updates, and contact data to a
 local SQLite database, and exposes the database through a CLI.
 
@@ -72,6 +74,8 @@ initial beta releases.
 - History backfill is best-effort and depends on what Google Messages returns
   through the paired phone.
 - The phone must be online for sync, backfill, sends, and media downloads.
+- Account pairing requires short-lived access to Google Account cookies from a
+  private browser window. They are as sensitive as a signed-in browser session.
 - The SQLite database is local but unencrypted. Use filesystem encryption if
   you need at-rest protection.
 - The protocol depends on the unofficial `libgm` reverse-engineered Google
@@ -79,12 +83,46 @@ initial beta releases.
 
 ## Quick start
 
+### Pair with a Google Account
+
+QR pairing has been retired by Google. Gaia pairing needs cookies from the
+same Google Account selected under **Google Messages → Device pairing**:
+
+1. Open a private Firefox window. Chrome sessions with Device Bound Session
+   Credentials enabled may not export reusable cookies.
+2. Visit
+   <https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config>
+   and sign into the account selected on the phone. Do not navigate elsewhere.
+3. Open browser developer tools, reload once, select the `/web/config`
+   request, and choose **Copy as cURL** (bash format).
+4. Put the copied command in a private file and authenticate:
+
 ```sh
-# 1. One-time pairing (renders a QR code in the terminal — scan with the
-#    Google Messages app on your phone, Settings → Device pairing → QR code).
-gmcli auth
-# In remote/sandboxed terminals, write a scan-friendly PNG instead:
-gmcli auth --qr-png /tmp/gmcli-pair-qr.png
+umask 077
+pbpaste > gmessages-cookies.txt  # use your platform's clipboard command
+gmcli auth --cookies-file gmessages-cookies.txt
+```
+
+Alternatively, pipe the copied cURL without creating another file:
+
+```sh
+pbpaste | gmcli auth --cookies-file -
+```
+
+The input may also be a JSON object containing `SID`, `HSID`, `SSID`, `OSID`,
+`APISID`, and `SAPISID`; `__Secure-1PSIDTS` is accepted when Google supplies
+it. Never put cookie values directly in shell arguments, issue reports, logs,
+or chat messages.
+
+If `session.json` already contains a Gaia pairing, `gmcli auth` validates that
+the cookies belong to the same account and refreshes the session without a new
+emoji prompt. Pass `--new` to deliberately create a new phone pairing. A
+failed attempt leaves the existing session file unchanged.
+
+### Sync and query
+
+```sh
+# 1. Pair first using the private-cookie instructions above.
 
 # 2. Sync messages from the phone into the local database. --follow keeps
 #    the connection open and writes new messages as they arrive.
@@ -170,8 +208,9 @@ by default.
 ## Privacy
 
 - All data is local. gmcli does not phone home.
-- Session tokens are stored in `$XDG_STATE_HOME/gmcli/session.json` with mode
-  0600.
+- Google cookies, pairing keys, and session tokens are stored together in
+  `$XDG_STATE_HOME/gmcli/session.json` with mode 0600. Treat the file like a
+  signed-in browser session; never commit, upload, or paste it into chat.
 - Media attachments are referenced by ID in the database; bytes are not
   downloaded by default. Use `gmcli media download --message <message-id>`
   for explicit downloads.
@@ -190,6 +229,10 @@ by default.
 - Storage and MCP-tool patterns draw from
   [openmessage](https://github.com/MaxGhenis/openmessage) by Max Ghenis,
   released under the Unlicense.
+- Agent-facing CLI ergonomics are informed by the
+  [Agent eXperience Interface](https://github.com/kunchenguid/axi) principles;
+  gmcli adapts them around stable JSON compatibility and message privacy. See
+  [`docs/research/axi-cli.md`](docs/research/axi-cli.md).
 
 ## License
 

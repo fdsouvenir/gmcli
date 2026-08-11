@@ -75,8 +75,10 @@ instruction layer published from the canonical gmcli repository.
   reply, draft the reply and tell them how to send it themselves; do not run
   any write command from this skill.
 - Pairing or syncing the archive ("connect my phone", "sync messages"). Tell
-  the user to run `gmcli auth` (one-time pairing) or `gmcli sync --follow`
-  themselves; do not run those yourself.
+  the user to follow gmcli's Google Account pairing instructions and run
+  `gmcli auth --cookies-file {private_file}` or `gmcli sync --follow`
+  themselves; do not run those yourself. Never ask the user to paste Google
+  cookies or `session.json` into chat, and never read either one.
 - Setting aliases or labels ("call her Mom from now on"). Do not run them
   from this skill. Tell the user the exact command to run themselves.
 - Downloading media. If the user wants to see an attachment, give them the
@@ -167,7 +169,10 @@ gmcli --json --read-only doctor
 Interpret the report by state:
 
 - If `paired` is false, the archive is unpaired. Tell the user to run
-  `gmcli auth`.
+  `gmcli auth --help` and follow its private Google Account pairing steps.
+- `auth_mode: gaia` is the supported pairing mode. `legacy_qr` identifies an
+  old saved session that can still be queried if Google has not invalidated it;
+  recommend migrating with `gmcli auth` when the user is ready.
 - If `issues` is non-empty, surface the issues list and stop.
 - If `last_sync_activity_time` is missing, zero, or stale for the user's
   task, the archive may not include recent messages. Tell the user to run
@@ -229,7 +234,7 @@ clear which content came from messages versus your own analysis.
 ## Errors
 
 - `no session at .../session.json` means the archive is unpaired. Tell the user to
-  run `gmcli auth`.
+  run `gmcli auth --help`; never ask them to share cookies in chat.
 - `1 issue(s) detected` from `doctor` means surface the issues list and stop.
 - FTS syntax error from `messages search` means retry once using the literal
   phrase quoting from the search playbook, then stop if it still fails.
