@@ -61,22 +61,22 @@ clawhub skill publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.3.1 \
-  --changelog "Add send readiness diagnostics, QR PNG pairing output, current Google Messages protocol library support, and strict real-SIM send metadata handling." \
+  --version 0.4.0 \
+  --changelog "Replace retired QR authentication with secure Google Account emoji pairing, add same-account reauthentication, and improve agent-facing CLI output and exit codes." \
   --tags latest,gmcli,google-messages,local,archive,sms,rcs,search,summarize,privacy
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.3.1 --files
+clawhub inspect google-messages-local-archive --version 0.4.0 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.3.1
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.4.0
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```
