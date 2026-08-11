@@ -43,9 +43,10 @@ func contactsAliasSetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "set",
 		Short: "Set or update a contact alias",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" || alias == "" {
-				return fmt.Errorf("--id and --alias are required")
+				return usageErrorf("--id and --alias are required")
 			}
 			st, err := openStore()
 			if err != nil {
@@ -73,9 +74,10 @@ func contactsAliasRmCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "rm",
 		Short: "Remove a contact alias",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if id == "" {
-				return fmt.Errorf("--id is required")
+				return usageErrorf("--id is required")
 			}
 			st, err := openStore()
 			if err != nil {
@@ -84,7 +86,8 @@ func contactsAliasRmCmd() *cobra.Command {
 			defer st.Close()
 			err = st.RemoveAlias(context.Background(), store.AliasContact, id)
 			if errors.Is(err, store.ErrNotFound) {
-				return fmt.Errorf("no alias set for %s", id)
+				fmt.Fprintf(os.Stdout, "Alias for %s is already absent (no-op).\n", id)
+				return nil
 			}
 			if err != nil {
 				return err
@@ -101,6 +104,7 @@ func contactsAliasListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all local aliases",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore()
 			if err != nil {
@@ -122,7 +126,7 @@ func contactsAliasListCmd() *cobra.Command {
 				return output.JSON(os.Stdout, contactsOnly)
 			}
 			if len(contactsOnly) == 0 {
-				fmt.Fprintln(os.Stderr, "(no aliases set)")
+				fmt.Fprintln(os.Stdout, "aliases: 0 contact aliases set")
 				return nil
 			}
 			rows := make([][]string, 0, len(contactsOnly))
@@ -155,7 +159,7 @@ func contactsSearchCmd() *cobra.Command {
 				return output.JSON(os.Stdout, hits)
 			}
 			if len(hits) == 0 {
-				fmt.Fprintln(os.Stderr, "(no matches)")
+				fmt.Fprintf(os.Stdout, "contacts: 0 matches for %q\n", query)
 				return nil
 			}
 			rows := make([][]string, 0, len(hits))
@@ -182,7 +186,7 @@ func contactsShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <participant-id-or-number>",
 		Short: "Show one contact's full record (lookup by participant_id or phone number)",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore()
 			if err != nil {

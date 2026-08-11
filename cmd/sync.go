@@ -50,6 +50,7 @@ func syncCmd() *cobra.Command {
 			"conversations, messages, and contacts into the SQLite store. With --follow, " +
 			"the connection stays open until interrupted; without it, the command runs the " +
 			"initial-sync pass and exits.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			layout, err := resolveLayout()
 			if err != nil {
@@ -147,6 +148,7 @@ func syncSendSettingsCmd() *cobra.Command {
 		Long: "Open the paired Google Messages session, request a send-settings refresh " +
 			"from the phone, and wait for real Settings/SIM metadata. This is a read-only " +
 			"network diagnostic: it updates only gmcli's local cache and never sends SMS.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			layout, err := resolveLayout()
 			if err != nil {

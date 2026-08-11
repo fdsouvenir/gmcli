@@ -12,8 +12,15 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "-v", "-V", "--version":
+			fmt.Println(cmd.CurrentVersion())
+			return
+		}
+	}
 	if err := cmd.Root().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "gmcli:", err)
-		os.Exit(1)
+		os.Exit(cmd.ExitCode(err))
 	}
 }

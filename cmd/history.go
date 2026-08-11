@@ -48,9 +48,10 @@ func historyBackfillCmd() *cobra.Command {
 			"FetchMessages calls gmcli makes, and --count limits how many message " +
 			"records each call asks the phone for. JSON output separates protocol " +
 			"records processed from messages added to the target conversation.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if chat == "" {
-				return fmt.Errorf("--chat is required")
+				return usageErrorf("--chat is required")
 			}
 			if requests <= 0 {
 				requests = 10

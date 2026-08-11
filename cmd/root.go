@@ -67,6 +67,9 @@ func Root() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return wrapUsage(err)
+	})
 	root.PersistentFlags().StringVar(&flags.storeDir, "store", "", "data directory (default: $XDG_STATE_HOME/gmcli or ~/.local/state/gmcli)")
 	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "info", "log verbosity: trace, debug, info, warn, error")
 	root.PersistentFlags().BoolVar(&flags.jsonOut, "json", false, "emit machine-readable JSON output where applicable")

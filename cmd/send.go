@@ -83,9 +83,10 @@ func sendTextCmd() *cobra.Command {
 			"Optionally `--reply-to <message_id>` to render the message as a " +
 			"quoted reply. Requires `--read-only=false` to be passed at the " +
 			"root since gmcli is read-only by default.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" || message == "" {
-				return fmt.Errorf("--to and --message are required")
+				return usageErrorf("--to and --message are required")
 			}
 			if err := requireWritable(); err != nil {
 				return err
@@ -138,9 +139,10 @@ func sendInspectCmd() *cobra.Command {
 		Short: "Inspect live send metadata for a conversation",
 		Long: "Open the paired Google Messages session and inspect sanitized live send metadata " +
 			"for a conversation without sending SMS.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" {
-				return fmt.Errorf("--to is required")
+				return usageErrorf("--to is required")
 			}
 			res, err := runSendInspect(to)
 			if flags.jsonOut {
@@ -291,6 +293,7 @@ func sendPreflightCmd() *cobra.Command {
 		Long: "Open the paired Google Messages session and check live send readiness " +
 			"without sending SMS. This command is read-only; it may refresh local " +
 			"Settings/SIM metadata in the gmcli store.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := runSendPreflight()
 			if flags.jsonOut {
@@ -440,12 +443,13 @@ func sendReactCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "react",
 		Short: "Add, remove, or switch a reaction on a message",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if msgID == "" || emoji == "" {
-				return fmt.Errorf("--message and --emoji are required")
+				return usageErrorf("--message and --emoji are required")
 			}
 			if remove && switchAct {
-				return fmt.Errorf("--remove and --switch are mutually exclusive")
+				return usageErrorf("--remove and --switch are mutually exclusive")
 			}
 			if err := requireWritable(); err != nil {
 				return err
