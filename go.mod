@@ -4,13 +4,11 @@ go 1.25.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/mdp/qrterminal/v3 v3.2.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.8.1
 	go.mau.fi/mautrix-gmessages v0.2605.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.34.4
-	rsc.io/qr v0.2.0
 )
 
 require (
@@ -27,7 +25,6 @@ require (
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect

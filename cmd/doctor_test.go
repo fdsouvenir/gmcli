@@ -5,11 +5,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
+
+func TestDoctorAuthIdentityFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		gaia      bool
+		wantMode  string
+		wantPhone string
+		wantEmail string
+	}{
+		{name: "Gaia", gaia: true, wantMode: "gaia", wantEmail: "person@example.com"},
+		{name: "legacy QR", wantMode: "legacy_qr", wantPhone: "phone-id"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := libgm.NewAuthData()
+			auth.Browser = &gmproto.Device{SourceID: "browser"}
+			auth.Mobile = &gmproto.Device{SourceID: tc.wantPhone}
+			if tc.gaia {
+				auth.Mobile.SourceID = tc.wantEmail
+				auth.DestRegID = uuid.New()
+				auth.Cookies = map[string]string{"SID": "secret"}
+			}
+
+			report := doctorReport{Paired: true}
+			populateDoctorAuthIdentity(&report, auth)
+			if report.AuthMode != tc.wantMode || report.PhoneID != tc.wantPhone || report.Account != tc.wantEmail {
+				t.Fatalf("unexpected identity fields: %+v", report)
+			}
+		})
+	}
+}
 
 func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 	oldFlags := flags

@@ -1,12 +1,12 @@
 // Package gm wraps go.mau.fi/mautrix-gmessages/pkg/libgm with the conventions
 // gmcli needs: filesystem-backed AuthData persistence, an event subscriber
-// model on top of libgm's single SetEventHandler, and helpers for the QR
-// pairing flow.
+// model on top of libgm's single SetEventHandler, and helpers for the Google
+// Account (Gaia) pairing flow.
 //
 // Two entry points cover the lifecycle:
 //
-//	Pair(ctx, layout, render)         // first run: produces session.json
-//	Open(layout, logger) -> *Client   // subsequent runs: ready to Connect()
+//	AuthenticateGaia(ctx, ...)       // first run/reauth: produces session.json
+//	Open(layout, logger) -> *Client  // subsequent runs: ready to Connect()
 //
 // The wrapper does not own a goroutine of its own; libgm runs the long-poll.
 // Subscribers must not block in their handlers.
@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,8 +33,8 @@ import (
 	"github.com/fdsouvenir/gmcli/internal/paths"
 )
 
-// PairTimeout is the upper bound on how long we wait for a phone to scan the
-// QR code. Google's relay drops unfinished pairings after a few minutes.
+// PairTimeout is the upper bound on a Google Account pairing attempt. Google's
+// relay drops unfinished emoji confirmations after a few minutes.
 const PairTimeout = 5 * time.Minute
 
 // sendMetadataTimeout bounds how long a write waits for the phone settings
@@ -539,7 +540,7 @@ func sendStatusMessage(resp *gmproto.SendMessageResponse) string {
 	switch resp.GetStatus() {
 	case gmproto.SendMessageResponse_UNKNOWN:
 		if resp.GetGoogleAccountSwitch() != nil {
-			return "switch back to QR pairing or log in with Google account to send messages"
+			return "re-run `gmcli auth` with Google Account cookies before sending messages"
 		}
 		return "unknown status"
 	case gmproto.SendMessageResponse_FAILURE_2:
@@ -642,71 +643,239 @@ func (c *Client) dispatch(evt any) {
 	}
 }
 
-// PairResult is returned by Pair on success. PhoneID identifies the paired
-// device; SessionPath is where the persisted AuthData lives.
+// PairResult is returned by AuthenticateGaia on success. PhoneID identifies
+// a newly paired phone when the protocol returns one, Account is the validated
+// Google Account, and SessionPath is where the persisted AuthData lives.
 type PairResult struct {
-	PhoneID     string
-	SessionPath string
+	Mode        string `json:"mode"`
+	PhoneID     string `json:"phone_id,omitempty"`
+	Account     string `json:"account,omitempty"`
+	SessionPath string `json:"session_path"`
 }
 
-// QRRenderer is invoked once Pair has the QR URL ready. The implementation
-// is responsible for displaying it (terminal QR, plain URL, etc.).
-type QRRenderer func(qrURL string)
+// EmojiRenderer is invoked once Gaia pairing has selected the emoji that the
+// user must tap in Google Messages on their phone.
+type EmojiRenderer func(emoji string)
 
-// Pair runs the QR pairing flow. It writes session.json on success and
-// returns the paired phone ID. Cancellable via ctx; otherwise bounded by
-// PairTimeout. Existing session.json (if any) is overwritten on success.
-func Pair(ctx context.Context, layout paths.Layout, logger zerolog.Logger, render QRRenderer) (*PairResult, error) {
-	if err := layout.EnsureDirs(); err != nil {
-		return nil, err
-	}
-	auth := libgm.NewAuthData()
-	cli := libgm.NewClient(auth, nil, logger)
+type gaiaPairingClient interface {
+	FetchConfig(context.Context) error
+	ConfigEmail() string
+	StartGaiaPairing(context.Context) (string, *libgm.PairingSession, error)
+	FinishGaiaPairing(context.Context, *libgm.PairingSession) (string, error)
+	ValidateConnection(context.Context) error
+	Disconnect()
+}
 
-	done := make(chan *events.PairSuccessful, 1)
+type libgmGaiaClient struct {
+	*libgm.Client
+}
+
+func (c *libgmGaiaClient) ConfigEmail() string {
+	return c.Config.GetDeviceInfo().GetEmail()
+}
+
+// ValidateConnection requires an RPC response from the paired phone. Connect
+// alone only starts libgm's long poll and can return before a revoked pairing
+// is rejected by the relay.
+func (c *libgmGaiaClient) ValidateConnection(ctx context.Context) error {
 	fatal := make(chan error, 1)
-	cli.SetEventHandler(func(evt any) {
+	c.SetEventHandler(func(evt any) {
+		var err error
 		switch e := evt.(type) {
-		case *events.PairSuccessful:
-			select {
-			case done <- e:
-			default:
-			}
 		case *events.ListenFatalError:
+			err = e.Error
+		case *events.GaiaLoggedOut:
+			err = errors.New("Google Account session was logged out")
+		case *events.PhoneNotResponding:
+			err = errors.New("paired phone is not responding")
+		case *events.PingFailed:
+			err = e.Error
+		}
+		if err != nil {
 			select {
-			case fatal <- fmt.Errorf("pairing transport failed: %w", e.Error):
+			case fatal <- err:
 			default:
 			}
 		}
 	})
-
-	qr, err := cli.StartLogin()
-	if err != nil {
-		return nil, fmt.Errorf("start login: %w", err)
+	if err := c.Connect(); err != nil {
+		return err
 	}
-	render(qr)
 
-	timeout := time.NewTimer(PairTimeout)
-	defer timeout.Stop()
-
+	roundTrip := make(chan error, 1)
+	go func() {
+		_, err := c.IsBugleDefault()
+		roundTrip <- err
+	}()
 	select {
-	case <-ctx.Done():
-		cli.Disconnect()
-		return nil, ctx.Err()
+	case err := <-roundTrip:
+		return err
 	case err := <-fatal:
-		cli.Disconnect()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type gaiaClientFactory func(*libgm.AuthData, zerolog.Logger) gaiaPairingClient
+
+func newGaiaClient(auth *libgm.AuthData, logger zerolog.Logger) gaiaPairingClient {
+	return &libgmGaiaClient{Client: libgm.NewClient(auth, nil, logger)}
+}
+
+// AuthenticateGaia pairs with Google Messages using Google Account cookies
+// and phone-side emoji confirmation. If a Gaia session already exists and
+// forceNew is false, it refreshes that session's cookies after verifying that
+// they belong to the same account. session.json is replaced only after the
+// complete operation succeeds.
+func AuthenticateGaia(
+	ctx context.Context,
+	layout paths.Layout,
+	logger zerolog.Logger,
+	cookies map[string]string,
+	forceNew bool,
+	render EmojiRenderer,
+) (*PairResult, error) {
+	return authenticateGaia(ctx, layout, logger, cookies, forceNew, render, newGaiaClient)
+}
+
+func authenticateGaia(
+	ctx context.Context,
+	layout paths.Layout,
+	logger zerolog.Logger,
+	cookies map[string]string,
+	forceNew bool,
+	render EmojiRenderer,
+	newClient gaiaClientFactory,
+) (*PairResult, error) {
+	if err := layout.EnsureDirs(); err != nil {
 		return nil, err
-	case <-timeout.C:
-		cli.Disconnect()
-		return nil, errors.New("pairing timed out — phone never scanned the QR code")
-	case res := <-done:
-		// libgm reconnects internally 2s after PairSuccessful; we're not
-		// going to keep this client around, so close down cleanly.
-		cli.Disconnect()
-		if err := saveAuth(layout.Session, auth); err != nil {
-			return nil, fmt.Errorf("persist session: %w", err)
+	}
+
+	pairCtx, cancel := context.WithTimeout(ctx, PairTimeout)
+	defer cancel()
+
+	if !forceNew {
+		if auth, err := loadAuth(layout.Session); err == nil && auth.IsGoogleAccount() {
+			return reauthenticateGaia(pairCtx, layout, logger, auth, cookies, newClient)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
-		return &PairResult{PhoneID: res.PhoneID, SessionPath: layout.Session}, nil
+	}
+
+	auth := libgm.NewAuthData()
+	auth.SetCookies(cloneCookies(cookies))
+	cli := newClient(auth, logger)
+	defer cli.Disconnect()
+
+	if err := cli.FetchConfig(pairCtx); err != nil {
+		return nil, fmt.Errorf("validate Google Account cookies: %w", err)
+	}
+	account := cli.ConfigEmail()
+	if account == "" {
+		return nil, errors.New("Google Messages config did not identify an account")
+	}
+	emoji, pairing, err := startGaiaPairingWithContext(pairCtx, cli)
+	if err != nil {
+		return nil, describeGaiaPairingError("start", err)
+	}
+	render(emoji)
+	phoneID, err := cli.FinishGaiaPairing(pairCtx, pairing)
+	if err != nil {
+		return nil, describeGaiaPairingError("finish", err)
+	}
+	if err := saveAuth(layout.Session, auth); err != nil {
+		return nil, fmt.Errorf("persist session: %w", err)
+	}
+	return &PairResult{
+		Mode:        "paired",
+		PhoneID:     phoneID,
+		Account:     account,
+		SessionPath: layout.Session,
+	}, nil
+}
+
+type gaiaStartResult struct {
+	emoji   string
+	pairing *libgm.PairingSession
+	err     error
+}
+
+// libgm v0.2605.0 waits for its initial long-poll callback without selecting
+// on the caller's context. Keep that dependency call behind a selectable
+// boundary so the CLI can honor its deadline and SIGINT. The caller's deferred
+// Disconnect closes an established poll before control returns.
+func startGaiaPairingWithContext(ctx context.Context, cli gaiaPairingClient) (string, *libgm.PairingSession, error) {
+	result := make(chan gaiaStartResult, 1)
+	go func() {
+		emoji, pairing, err := cli.StartGaiaPairing(ctx)
+		result <- gaiaStartResult{emoji: emoji, pairing: pairing, err: err}
+	}()
+	select {
+	case res := <-result:
+		return res.emoji, res.pairing, res.err
+	case <-ctx.Done():
+		return "", nil, ctx.Err()
+	}
+}
+
+func reauthenticateGaia(
+	ctx context.Context,
+	layout paths.Layout,
+	logger zerolog.Logger,
+	auth *libgm.AuthData,
+	cookies map[string]string,
+	newClient gaiaClientFactory,
+) (*PairResult, error) {
+	previousAccount := auth.Mobile.GetSourceID()
+	auth.SetCookies(cloneCookies(cookies))
+	cli := newClient(auth, logger)
+	defer cli.Disconnect()
+
+	if err := cli.FetchConfig(ctx); err != nil {
+		return nil, fmt.Errorf("validate replacement Google Account cookies: %w", err)
+	}
+	account := cli.ConfigEmail()
+	if previousAccount == "" || account == "" || !strings.EqualFold(previousAccount, account) {
+		return nil, fmt.Errorf("cookies belong to a different Google Account; use the original account or pass --new")
+	}
+	if err := cli.ValidateConnection(ctx); err != nil {
+		return nil, fmt.Errorf("validate existing Google Messages pairing: %w", err)
+	}
+	if err := saveAuth(layout.Session, auth); err != nil {
+		return nil, fmt.Errorf("persist refreshed session: %w", err)
+	}
+	return &PairResult{
+		Mode:        "reauthenticated",
+		Account:     account,
+		SessionPath: layout.Session,
+	}, nil
+}
+
+func cloneCookies(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for name, value := range in {
+		out[name] = value
+	}
+	return out
+}
+
+func describeGaiaPairingError(stage string, err error) error {
+	switch {
+	case errors.Is(err, libgm.ErrNoCookies):
+		return fmt.Errorf("%s Gaia pairing: required Google Account cookies are missing: %w", stage, err)
+	case errors.Is(err, libgm.ErrNoDevicesFound):
+		return fmt.Errorf("%s Gaia pairing: no phone has Google Account pairing enabled; open Google Messages > Device pairing on the phone: %w", stage, err)
+	case errors.Is(err, libgm.ErrPairingInitTimeout):
+		return fmt.Errorf("%s Gaia pairing: phone did not respond; keep Google Messages open and disable battery optimization temporarily: %w", stage, err)
+	case errors.Is(err, libgm.ErrIncorrectEmoji):
+		return fmt.Errorf("%s Gaia pairing: the wrong emoji was selected on the phone: %w", stage, err)
+	case errors.Is(err, libgm.ErrPairingCancelled):
+		return fmt.Errorf("%s Gaia pairing: confirmation was cancelled on the phone: %w", stage, err)
+	case errors.Is(err, libgm.ErrPairingTimeout), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s Gaia pairing: confirmation timed out; run `gmcli auth` again: %w", stage, err)
+	default:
+		return fmt.Errorf("%s Gaia pairing: %w", stage, err)
 	}
 }
 
@@ -714,7 +883,7 @@ func loadAuth(path string) (*libgm.AuthData, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no session at %s; run `gmcli auth` first", path)
+			return nil, fmt.Errorf("no session at %s; run `gmcli auth` first: %w", path, os.ErrNotExist)
 		}
 		return nil, fmt.Errorf("open session %s: %w", path, err)
 	}
