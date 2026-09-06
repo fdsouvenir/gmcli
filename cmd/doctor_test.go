@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
 
@@ -83,5 +87,107 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 	}
 	if report.SendSettingsDefault == nil || !*report.SendSettingsDefault {
 		t.Fatalf("send settings default SMS app: got %v want true", report.SendSettingsDefault)
+	}
+}
+
+func TestDoctorPairingModeUsesAccountIdentity(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	for _, mode := range []string{"legacy_qr", "gaia"} {
+		t.Run(mode, func(t *testing.T) {
+			flags = globalFlags{storeDir: t.TempDir(), readOnly: true}
+			layout, err := resolveLayout()
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth := libgm.NewAuthData()
+			auth.Browser = &gmproto.Device{}
+			if mode == "gaia" {
+				auth.DestRegID = uuid.New()
+			}
+			// Upstream HasCookies is also true for QR accounts; it is not a mode predicate.
+			data, err := json.Marshal(auth)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(layout.Session, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if got := runDoctor(context.Background()).PairingMode; got != mode {
+				t.Fatalf("got pairing mode %s, want %s", got, mode)
+			}
+		})
+	}
+}
+
+func TestDoctorJSONIssuesReturnFailure(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	oldOut := os.Stdout
+	out, err := os.CreateTemp(t.TempDir(), "doctor-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = out
+	t.Cleanup(func() { os.Stdout = oldOut; out.Close() })
+	root := Root()
+	root.SetArgs([]string{"--store", t.TempDir(), "--json", "doctor"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("JSON doctor returned success with issues")
+	}
+	if _, err := out.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	var r doctorReport
+	if err := json.NewDecoder(out).Decode(&r); err != nil {
+		t.Fatal(err)
+	}
+	if r.HealthStatus != "unknown" || len(r.Issues) == 0 {
+		t.Fatalf("false green: %+v", r)
+	}
+}
+
+func TestDoctorReportsEvidenceWithoutMessageAgeGuess(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags = globalFlags{storeDir: t.TempDir(), readOnly: true}
+	layout, err := resolveLayout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := libgm.NewAuthData()
+	auth.Browser = &gmproto.Device{}
+	data, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.Session, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.TouchSync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := runDoctor(ctx).HealthStatus; got != "unknown" {
+		t.Fatalf("legacy false positive: %s", got)
+	}
+	for _, kind := range []string{"starting", "data"} {
+		if err := st.ObserveHealth(ctx, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := runDoctor(ctx).HealthStatus; got != "recently_verified" {
+		t.Fatalf("fresh evidence: %s", got)
+	}
+	if err := st.ObserveHealth(ctx, "fatal"); err != nil {
+		t.Fatal(err)
+	}
+	if got := runDoctor(ctx).HealthStatus; got != "unhealthy" {
+		t.Fatalf("terminal failure: %s", got)
 	}
 }

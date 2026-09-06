@@ -10,6 +10,8 @@ import (
 	"rsc.io/qr"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
+	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
 func authCmd() *cobra.Command {
@@ -29,6 +31,9 @@ func authCmd() *cobra.Command {
 			ctx, cancel := signalContext(context.Background())
 			defer cancel()
 
+			if err := invalidatePairingHealth(ctx, layout); err != nil {
+				return err
+			}
 			fmt.Fprintln(os.Stderr, "Requesting pairing token from Google...")
 			res, err := gm.Pair(ctx, layout, logger, func(qrURL string) {
 				if qrPNG != "" {
@@ -67,4 +72,14 @@ func writeQRPNG(path, text string) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
+}
+
+// Re-pairing must not inherit a previous session's positive health evidence.
+func invalidatePairingHealth(ctx context.Context, layout paths.Layout) error {
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.ObserveHealth(ctx, "session_changed")
 }

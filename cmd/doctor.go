@@ -17,24 +17,27 @@ import (
 )
 
 type doctorReport struct {
-	StoreRoot            string    `json:"store_root"`
-	SessionExists        bool      `json:"session_exists"`
-	SessionPath          string    `json:"session_path"`
-	Paired               bool      `json:"paired"`
-	PhoneID              string    `json:"phone_id,omitempty"`
-	StoreOpens           bool      `json:"store_opens"`
-	SchemaVersion        int       `json:"schema_version,omitempty"`
-	Conversations        int       `json:"conversations,omitempty"`
-	Messages             int       `json:"messages,omitempty"`
-	Contacts             int       `json:"contacts,omitempty"`
-	LastEventTime        time.Time `json:"last_event_time,omitempty"`
-	LastConnectTime      time.Time `json:"last_connect_time,omitempty"`
-	LastSyncActivityTime time.Time `json:"last_sync_activity_time,omitempty"`
-	SendSettingsCached   bool      `json:"send_settings_cached"`
-	SendSettingsSIMCount int       `json:"send_settings_sim_count,omitempty"`
-	SendSettingsUpdated  time.Time `json:"send_settings_updated_at,omitempty"`
-	SendSettingsDefault  *bool     `json:"send_settings_cached_default_sms_app,omitempty"`
-	Issues               []string  `json:"issues,omitempty"`
+	Health               store.Health `json:"health"`
+	HealthStatus         string       `json:"health_status"`
+	PairingMode          string       `json:"pairing_mode"`
+	StoreRoot            string       `json:"store_root"`
+	SessionExists        bool         `json:"session_exists"`
+	SessionPath          string       `json:"session_path"`
+	Paired               bool         `json:"paired"`
+	PhoneID              string       `json:"phone_id,omitempty"`
+	StoreOpens           bool         `json:"store_opens"`
+	SchemaVersion        int          `json:"schema_version,omitempty"`
+	Conversations        int          `json:"conversations,omitempty"`
+	Messages             int          `json:"messages,omitempty"`
+	Contacts             int          `json:"contacts,omitempty"`
+	LastEventTime        time.Time    `json:"last_event_time,omitempty"`
+	LastConnectTime      time.Time    `json:"last_connect_time,omitempty"`
+	LastSyncActivityTime time.Time    `json:"last_sync_activity_time,omitempty"`
+	SendSettingsCached   bool         `json:"send_settings_cached"`
+	SendSettingsSIMCount int          `json:"send_settings_sim_count,omitempty"`
+	SendSettingsUpdated  time.Time    `json:"send_settings_updated_at,omitempty"`
+	SendSettingsDefault  *bool        `json:"send_settings_cached_default_sms_app,omitempty"`
+	Issues               []string     `json:"issues,omitempty"`
 }
 
 func doctorCmd() *cobra.Command {
@@ -43,7 +46,7 @@ func doctorCmd() *cobra.Command {
 		Short: "Inspect session, store, and freshness state",
 		Long: "Run a non-network self-check: does the session file exist and contain " +
 			"a paired device? Does the SQLite store open and report a healthy schema? " +
-			"How fresh is the last sync activity?",
+			"Report separate process, transport and phone evidence; cached pairing is not connectivity.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signalContext(context.Background())
 			defer cancel()
@@ -52,7 +55,13 @@ func doctorCmd() *cobra.Command {
 			if flags.jsonOut {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(report)
+				if err := enc.Encode(report); err != nil {
+					return err
+				}
+				if len(report.Issues) > 0 {
+					return fmt.Errorf("%d issue(s) detected", len(report.Issues))
+				}
+				return nil
 			}
 			renderDoctor(report)
 			if len(report.Issues) > 0 {
@@ -64,7 +73,7 @@ func doctorCmd() *cobra.Command {
 }
 
 func runDoctor(ctx context.Context) doctorReport {
-	r := doctorReport{}
+	r := doctorReport{HealthStatus: "unknown"}
 	layout, err := resolveLayout()
 	if err != nil {
 		r.Issues = append(r.Issues, fmt.Sprintf("resolve layout: %v", err))
@@ -82,6 +91,10 @@ func runDoctor(ctx context.Context) doctorReport {
 			snap, err := client.AuthSnapshot()
 			if err == nil && snap != nil && snap.Browser != nil {
 				r.Paired = true
+				r.PairingMode = "legacy_qr"
+				if snap.IsGoogleAccount() {
+					r.PairingMode = "gaia"
+				}
 				r.PhoneID = snap.Mobile.GetSourceID()
 			}
 		}
@@ -116,6 +129,19 @@ func runDoctor(ctx context.Context) doctorReport {
 		r.LastConnectTime = state.LastConnectTime
 		r.LastSyncActivityTime = state.UpdatedAt
 	}
+	if h, err := st.Health(ctx); err != nil {
+		r.Issues = append(r.Issues, "read connection health failed")
+	} else {
+		r.Health = h
+		var issue string
+		r.HealthStatus, issue = h.Assessment(time.Now())
+		if issue != "" {
+			r.Issues = append(r.Issues, issue)
+		}
+	}
+	if !r.Paired {
+		r.Issues = append(r.Issues, "no locally paired session")
+	}
 	settings, err := st.LatestPhoneSettings(ctx)
 	switch {
 	case err == nil:
@@ -141,6 +167,8 @@ func renderDoctor(r doctorReport) {
 	fmt.Println("============")
 	fmt.Printf("  store root:       %s\n", r.StoreRoot)
 	fmt.Printf("  session present:  %v\n", r.SessionExists)
+	fmt.Printf("  health:           %s (offline evidence only)\n", r.HealthStatus)
+	fmt.Printf("  pairing mode:     %s\n", r.PairingMode)
 	fmt.Printf("  paired:           %v\n", r.Paired)
 	if r.PhoneID != "" {
 		fmt.Printf("  phone id:         %s\n", r.PhoneID)
@@ -163,9 +191,9 @@ func renderDoctor(r doctorReport) {
 		fmt.Printf("  last connect:     (none yet)\n")
 	}
 	if r.LastSyncActivityTime.UnixMilli() > 0 {
-		fmt.Printf("  last sync activity: %s\n", r.LastSyncActivityTime.Format(time.RFC3339))
+		fmt.Printf("  legacy sync activity (not health): %s\n", r.LastSyncActivityTime.Format(time.RFC3339))
 	} else {
-		fmt.Printf("  last sync activity: (none yet)\n")
+		fmt.Printf("  legacy sync activity (not health): (none yet)\n")
 	}
 	fmt.Printf("  send settings cached: %v\n", r.SendSettingsCached)
 	if r.SendSettingsCached {
