@@ -45,6 +45,17 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 Requires Go 1.25 or newer.
 
+Install a published version using its module path (replace `VERSION` with an
+existing release tag):
+
+```sh
+GOBIN="$HOME/.local/bin" go install github.com/fdsouvenir/gmcli@VERSION
+```
+
+Keep `$HOME/.local/bin` on your PATH. For the proposed health-only v0.3.2 release,
+see [release notes and versioned installation](docs/releases/v0.3.2.md); do not
+install that tag before it is published. For local development:
+
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
 cd gmcli
@@ -76,6 +87,15 @@ initial beta releases.
   you need at-rest protection.
 - The protocol depends on the unofficial `libgm` reverse-engineered Google
   Messages web protocol and can break if Google changes that protocol.
+
+## Connection health
+
+`doctor` is an offline evidence report, not a live connectivity test. Saved
+pairing and legacy activity timestamps cannot establish health. Reports distinguish
+`recently_verified`, `unknown`, and `unhealthy`; issues return a nonzero exit
+status in both text and JSON mode. Quiet connections can become `unknown` after
+15 minutes without observable archive confirmation, even while connected.
+See [health semantics and schema compatibility](docs/connection-health.md).
 
 ## Quick start
 
@@ -148,7 +168,7 @@ cmd/                  Cobra command tree (auth, sync, version, doctor,
 internal/
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
-  store/              SQLite + FTS5 store (schema v3: aliases + send settings cache)
+  store/              SQLite + FTS5 store (schema v4: separate connection health evidence)
   sync/               Event-to-store pump
   output/             Shared JSON / tab-aligned table renderers
   paths/              XDG path resolution (XDG_STATE_HOME)
