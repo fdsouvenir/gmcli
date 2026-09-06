@@ -34,8 +34,8 @@ func TestOpenMigratesFreshDB(t *testing.T) {
 	if state.LastEventTime.UnixMilli() != 0 || state.LastConnectTime.UnixMilli() != 0 {
 		t.Fatalf("expected unset (epoch) sync timestamps, got %+v", state)
 	}
-	if v, err := st.SchemaVersion(ctx); err != nil || v != 3 {
-		t.Fatalf("schema version: got %d err=%v, want 3", v, err)
+	if v, err := st.SchemaVersion(ctx); err != nil || v != 4 {
+		t.Fatalf("schema version: got %d err=%v, want 4", v, err)
 	}
 }
 
