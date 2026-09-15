@@ -14,7 +14,7 @@ import (
 var Version = "dev"
 
 // CurrentVersion returns the injected release version for fast CLI probes.
-func CurrentVersion() string { return Version }
+func CurrentVersion() string { return buildInfo().Version }
 
 const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +
 	"It depends on libgm from mautrix/gmessages (AGPL-3.0, " +
