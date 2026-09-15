@@ -32,5 +32,5 @@ require_version() {
 }
 
 require_version openclaw --version 2026 8 1
-require_version gmcli version 1 0 0
-printf 'Runtime compatible: OpenClaw >=2026.8.1 and gmcli >=1.0.0.\n'
+require_version gmcli version 1 1 0
+printf 'Runtime compatible: OpenClaw >=2026.8.1 and gmcli >=1.1.0.\n'

@@ -2,8 +2,8 @@
 name: google-messages-local-archive
 description: Search and summarize your local Google Messages SMS/RCS history from OpenClaw. Ask who said what, find old texts, and get conversation context while your message archive stays on your machine and the bundled workflow stays read-only by default.
 metadata:
-  version: "1.0.0"
-  compatibility: "OpenClaw >=2026.8.1; gmcli >=1.0.0"
+  version: "1.1.0"
+  compatibility: "OpenClaw >=2026.8.1; gmcli >=1.1.0"
   openclaw:
     homepage: https://github.com/fdsouvenir/gmcli
     requires:
@@ -11,9 +11,9 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v1.0.0
+        module: github.com/fdsouvenir/gmcli@v1.1.0
         bins: ["gmcli"]
-        label: Install gmcli v1.0.0 with Go
+        label: Install gmcli v1.1.0 with Go
 ---
 
 # Google Messages Local Archive
@@ -39,7 +39,7 @@ authority.
 
 ## Runtime compatibility
 
-Requires **OpenClaw 2026.8.1 (OpenClaw 2.0) or newer** and **gmcli 1.0.0
+Requires **OpenClaw 2026.8.1 (OpenClaw 2.0) or newer** and **gmcli 1.1.0
 or newer**. Before the first archive query in a session, run:
 
 ```sh
@@ -51,7 +51,7 @@ user update it before continuing. This check reads version output only; it does
 not access messages, cookies, or session files. OpenClaw 2026.8.1 has no native
 minimum-version field for skills, so the declared compatibility is enforced by
 this preflight. Other skill-aware harnesses may use the archive playbook with
-gmcli 1.0.0 or newer; the OpenClaw runtime check applies to OpenClaw use.
+gmcli 1.1.0 or newer; the OpenClaw runtime check applies to OpenClaw use.
 
 ## Setup and install expectations
 
