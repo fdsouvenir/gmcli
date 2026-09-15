@@ -14,6 +14,8 @@ import (
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/output"
+	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
 const maxCookieInputBytes = 1 << 20
@@ -63,6 +65,9 @@ func authCmd() *cobra.Command {
 			ctx, cancel := signalContext(context.Background())
 			defer cancel()
 
+			if err := invalidatePairingHealth(ctx, layout); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Validating Google Account session...")
 			res, err := gm.AuthenticateGaia(ctx, layout, logger, cookies, forceNew, func(emoji string) {
 				fmt.Fprintln(cmd.ErrOrStderr(), "On your phone, open Google Messages and tap this matching emoji:")
@@ -170,4 +175,13 @@ func parseGoogleCookies(raw []byte) (map[string]string, error) {
 		return nil, fmt.Errorf("cookie input is missing required names: %s", strings.Join(missing, ", "))
 	}
 	return filtered, nil
+}
+
+func invalidatePairingHealth(ctx context.Context, layout paths.Layout) error {
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.ObserveHealth(ctx, "session_changed")
 }

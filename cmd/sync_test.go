@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/output"
@@ -181,5 +182,45 @@ func (f *fakeSettingsClient) WaitForSettings(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func TestSendSettingsCachedTimeoutNotReady(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	raw, err := proto.Marshal(&gmproto.Settings{SIMCards: []*gmproto.SIMCard{{SIMParticipant: &gmproto.SIMParticipant{ID: "cached"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SavePhoneSettings(ctx, raw, 1); err != nil {
+		t.Fatal(err)
+	}
+	res, err := runSendSettingsRefresh(ctx, newFakeSettingsClient(nil), st, zerolog.Nop(), time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.CachedBefore || !res.CachedAfter || res.SendReady || res.SettingsReceived {
+		t.Fatalf("cached settings falsely green: %+v", res)
+	}
+}
+
+func TestHealthSnapshotValidation(t *testing.T) {
+	for _, r := range []*gmproto.ListConversationsResponse{nil, {Conversations: []*gmproto.Conversation{nil}}, {Conversations: []*gmproto.Conversation{{}}}, {CursorBytes: []byte{1}}} {
+		if _, ok := conversationSnapshotRows(r); ok {
+			t.Fatal("invalid response accepted")
+		}
+	}
+	if n, ok := conversationSnapshotRows(&gmproto.ListConversationsResponse{}); !ok || n != 0 {
+		t.Fatal("valid empty snapshot rejected")
+	}
+	if _, ok := contactSnapshotRows(nil); ok {
+		t.Fatal("nil contact snapshot accepted")
+	}
+	if _, ok := contactSnapshotRows(&gmproto.ListContactsResponse{Contacts: []*gmproto.Contact{{}}}); ok {
+		t.Fatal("invalid contact accepted")
 	}
 }

@@ -84,6 +84,12 @@ func syncCmd() *cobra.Command {
 			if resp, err := client.Underlying().ListContacts(); err != nil {
 				logger.Warn().Err(err).Msg("Contact import failed")
 			} else {
+				validContacts, valid := contactSnapshotRows(resp)
+				if !valid {
+					pump.Observe("snapshot_invalid")
+				} else {
+					pump.ObserveSnapshot("contacts", validContacts)
+				}
 				imported := pump.ImportContacts(ctx, resp.GetContacts())
 				logger.Info().Int("contacts", imported).Msg("Imported contacts")
 			}
@@ -91,6 +97,12 @@ func syncCmd() *cobra.Command {
 			if resp, err := client.Underlying().ListConversations(50, gmproto.ListConversationsRequest_INBOX); err != nil {
 				logger.Warn().Err(err).Msg("Conversation import failed")
 			} else {
+				validConversations, valid := conversationSnapshotRows(resp)
+				if !valid {
+					pump.Observe("snapshot_invalid")
+				} else {
+					pump.ObserveSnapshot("conversations", validConversations)
+				}
 				convs, msgs := 0, 0
 				for _, conv := range resp.GetConversations() {
 					if conv == nil || conv.GetConversationID() == "" {
@@ -113,11 +125,11 @@ func syncCmd() *cobra.Command {
 					return err
 				default:
 				}
-				fmt.Fprintln(os.Stderr, "Initial sync complete. Pass --follow to stay connected.")
+				fmt.Fprintln(os.Stderr, "Initial sync pass finished (not a connectivity verdict). Pass --follow to keep receiving events.")
 				return nil
 			}
 
-			fmt.Fprintln(os.Stderr, "Connected. Streaming events. Ctrl-C to stop.")
+			fmt.Fprintln(os.Stderr, "Connection requested. Waiting for phone events; process activity is not connectivity proof. Ctrl-C to stop.")
 			heartbeat := time.NewTicker(syncHeartbeatInterval)
 			defer heartbeat.Stop()
 			for {
@@ -128,9 +140,7 @@ func syncCmd() *cobra.Command {
 				case err := <-pump.Fatal():
 					return err
 				case <-heartbeat.C:
-					if err := st.TouchSync(ctx); err != nil {
-						logger.Debug().Err(err).Msg("sync heartbeat failed")
-					}
+					pump.Observe("heartbeat")
 				}
 			}
 		},
@@ -237,7 +247,7 @@ func runSendSettingsRefresh(ctx context.Context, client sendSettingsRefreshClien
 		res.CachedAfter = true
 		res.SIMCount = settings.SIMCount
 		res.UpdatedAt = settings.UpdatedAt
-		res.SendReady = settings.SIMCount > 0
+		res.SendReady = res.SettingsReceived && settings.SIMCount > 0
 		if res.SettingsReceived && !res.SendReady {
 			res.Issues = append(res.Issues, "Settings received, but it contained no SIM cards")
 		}
@@ -289,4 +299,32 @@ func renderSendSettingsRefresh(res sendSettingsRefreshResult) {
 			fmt.Printf("  - %s\n", issue)
 		}
 	}
+}
+
+func contactSnapshotRows(resp *gmproto.ListContactsResponse) (int, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	for _, c := range resp.GetContacts() {
+		if c == nil || c.GetParticipantID() == "" {
+			return 0, false
+		}
+	}
+	return len(resp.GetContacts()), true
+}
+func conversationSnapshotRows(resp *gmproto.ListConversationsResponse) (int, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	for _, c := range resp.GetConversations() {
+		if c == nil || c.GetConversationID() == "" {
+			return 0, false
+		}
+	}
+	count := len(resp.GetConversations())
+	// An empty page with continuation is not evidence of a truly empty inbox.
+	if count == 0 && (len(resp.GetCursorBytes()) > 0 || resp.GetCursor() != nil) {
+		return 0, false
+	}
+	return count, true
 }

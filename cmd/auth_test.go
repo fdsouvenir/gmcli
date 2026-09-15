@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/fdsouvenir/gmcli/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const completeCookieJSON = `{
@@ -120,5 +124,36 @@ func TestAuthClassifiesMalformedCookiesAsUsage(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked cookie value: %v", err)
+	}
+}
+
+func TestPairingInvalidatesPriorHealthWithoutNetwork(t *testing.T) {
+	ctx := context.Background()
+	layout, err := paths.Resolve(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, kind := range []string{"starting", "data"} {
+		if err := st.ObserveHealth(ctx, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := invalidatePairingHealth(ctx, layout); err != nil {
+		t.Fatal(err)
+	}
+	h, err := st.Health(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := h.Assessment(time.Now()); status != "unhealthy" || h.Invalidation != "session_changed" {
+		t.Fatalf("prior health retained: %+v", h)
 	}
 }

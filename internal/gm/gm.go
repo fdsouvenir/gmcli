@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -102,19 +103,26 @@ func (c *Client) Subscribe(h EventHandler) {
 	c.mu.Unlock()
 }
 
-// Connect opens the long-poll connection. Events flow to subscribers
-// immediately. Returns when the initial sync completes; the connection
-// continues running in a background goroutine inside libgm.
+// Connect requests a long-poll connection. It returns before initial sync or
+// transport readiness; libgm continues in a background goroutine.
 func (c *Client) Connect() error {
 	c.mu.Lock()
 	c.ready = false
 	c.mu.Unlock()
-	return c.libgm.Connect()
+	c.dispatch(&ConnectionStarting{})
+	err := c.libgm.Connect()
+	if err != nil {
+		c.dispatch(&events.ListenFatalError{Error: err})
+	} else {
+		c.dispatch(&TransportRequested{})
+	}
+	return err
 }
 
 // Disconnect closes the long-poll. Safe to call multiple times.
 func (c *Client) Disconnect() {
 	c.libgm.Disconnect()
+	c.dispatch(&ConnectionStopped{})
 	c.mu.Lock()
 	c.ready = false
 	c.mu.Unlock()
@@ -626,6 +634,11 @@ func (c *Client) dispatch(evt any) {
 		if err := saveAuth(c.layout.Session, c.auth); err != nil {
 			c.logger.Error().Err(err).Msg("Failed to persist refreshed auth data")
 		}
+	case *events.GaiaLoggedOut, *events.ListenFatalError, *events.ListenTemporaryError, *ConnectionStopped:
+		c.mu.Lock()
+		c.ready = false
+		c.settings = nil
+		c.mu.Unlock()
 	case *events.ClientReady:
 		c.mu.Lock()
 		c.ready = true
@@ -896,11 +909,12 @@ func loadAuth(path string) (*libgm.AuthData, error) {
 }
 
 func saveAuth(path string, auth *libgm.AuthData) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(path), ".session-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create %s: %w", tmp, err)
+		return fmt.Errorf("create session temporary file: %w", err)
 	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(auth); err != nil {
@@ -917,3 +931,10 @@ func saveAuth(path string, auth *libgm.AuthData) error {
 	}
 	return nil
 }
+
+// ConnectionStarting and ConnectionStopped mark wrapper-owned lifecycle boundaries.
+type ConnectionStarting struct{}
+type ConnectionStopped struct{}
+
+// TransportRequested means asynchronous Connect returned, not that the socket or phone is ready.
+type TransportRequested struct{}

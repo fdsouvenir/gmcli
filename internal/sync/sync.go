@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
@@ -46,12 +48,30 @@ func (p *Pump) Fatal() <-chan error {
 // Handle is the entry point registered with gm.Client.Subscribe. It must
 // not block; errors are logged but do not propagate.
 func (p *Pump) Handle(evt any) {
+	if evt == nil || (reflect.ValueOf(evt).Kind() == reflect.Ptr && reflect.ValueOf(evt).IsNil()) {
+		return
+	}
+	switch e := evt.(type) {
+	case *gmproto.Conversation:
+		if e == nil || e.GetConversationID() == "" {
+			return
+		}
+	case *libgm.WrappedMessage:
+		if e == nil || e.Message == nil || e.Message.GetMessageID() == "" || e.Message.GetConversationID() == "" {
+			return
+		}
+	case *gmproto.Settings:
+		if e == nil {
+			return
+		}
+	}
 	ctx := context.Background()
+	p.observeEvent(evt)
 	switch e := evt.(type) {
 	case *events.ClientReady:
 		p.onClientReady(ctx, e)
 	case *events.AuthTokenRefreshed:
-		p.touch(ctx)
+	// Relay authentication is not a phone response.
 	case *gmproto.Conversation:
 		p.onConversation(ctx, e)
 	case *libgm.WrappedMessage:
@@ -232,7 +252,7 @@ func (p *Pump) onMessage(ctx context.Context, w *libgm.WrappedMessage) {
 		return
 	}
 	if !w.IsOld {
-		_ = p.store.MarkSync(ctx, time.UnixMilli(row.TimestampMS), time.Now())
+		_ = p.store.MarkSync(ctx, time.UnixMilli(row.TimestampMS), time.Time{})
 	}
 }
 
@@ -370,4 +390,62 @@ func normalizeTimestampMS(ts int64) int64 {
 		return ts / 1000
 	}
 	return ts
+}
+
+// Observe persists explicit connection lifecycle or successful RPC evidence.
+func (p *Pump) Observe(kind string) {
+	if err := p.store.ObserveHealth(context.Background(), kind); err != nil {
+		p.fail(fmt.Errorf("persist health: %w", err))
+	}
+}
+func (p *Pump) observeEvent(evt any) {
+	switch e := evt.(type) {
+	case *events.ClientReady:
+		p.Observe("transport")
+		p.Observe("protocol")
+	case *events.AuthTokenRefreshed:
+		p.Observe("protocol")
+	case *gmproto.Conversation:
+		if e != nil && e.GetConversationID() != "" {
+			p.Observe("data")
+		}
+	case *libgm.WrappedMessage:
+		if e != nil && e.Message != nil && e.Message.GetMessageID() != "" {
+			p.Observe("data")
+		}
+	case *gmproto.Settings:
+		p.Observe("phone") // settings/pings do not confirm archive visibility
+	case *events.PhoneRespondingAgain:
+		p.Observe("phone")
+	case *events.PhoneNotResponding, *events.PingFailed:
+		p.Observe("phone_unresponsive")
+	case *events.ListenTemporaryError:
+		p.Observe("temporary_error")
+	case *events.ListenRecovered:
+		p.Observe("transport")
+	case *events.GaiaLoggedOut:
+		p.Observe("auth_invalid")
+	case *events.ListenFatalError:
+		p.Observe("fatal")
+	case *events.NoDataReceived:
+		p.Observe("no_data")
+	case *gm.TransportRequested:
+		p.Observe("transport_requested")
+	case *gm.ConnectionStarting:
+		p.Observe("starting")
+	case *gm.ConnectionStopped:
+		p.Observe("disconnected")
+	}
+}
+
+// ObserveSnapshot records initial list evidence before import.
+func (p *Pump) ObserveSnapshot(kind string, validRows int) {
+	mismatch, err := p.store.ObserveSnapshot(context.Background(), kind, validRows)
+	if err != nil {
+		p.fail(fmt.Errorf("persist snapshot evidence: %w", err))
+		return
+	}
+	if mismatch {
+		p.logger.Warn().Str("snapshot", kind).Msg("Empty initial snapshot against populated archive; verify account and archive completeness. Phone pings do not resolve this discrepancy.")
+	}
 }
