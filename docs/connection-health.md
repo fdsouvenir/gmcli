@@ -77,21 +77,23 @@ Opening a store, including through offline `doctor`, applies pending migrations;
 back up the database and session before a version change. Read-only means no
 phone mutations, not a promise that SQLite files remain byte-for-byte unchanged.
 
-Re-pairing conservatively invalidates old health before the existing QR flow.
+Authentication conservatively invalidates old health before the Google Account
+flow. A cancelled or failed attempt preserves the saved session; new sync
+evidence is still required before health can be verified again.
 Session persistence uses an unpredictable mode-0600 temporary file and atomic
-rename; write or rename failure does not replace an existing session. No new
-pairing command, dependency upgrade, or Google-account authentication flow is
-included. Google-account pairing remains separate in [PR #4](https://github.com/fdsouvenir/gmcli/pull/4),
-with its real-device release gate unchanged.
+rename; write or rename failure does not replace an existing session. Google Account authentication uses private cookie input and phone-side emoji
+confirmation. Same-account reauthentication additionally requires a phone RPC
+response before saving replacement cookies.
 
 `sync send-settings` no longer labels cached SIM metadata send-ready when the
 current refresh times out. Cache availability remains separate from a successful
 response during this run. Send/reaction opt-in protections are unchanged.
 
-The archive skill is independently versioned and is not republished here.
-Older skill instructions that infer health from pairing, process locks, message
-age, or `last_sync_activity_time` are outdated; use these evidence semantics.
-No live-device validation or reconnection is claimed by this patch.
+The current archive skill uses these evidence semantics and requires
+OpenClaw 2026.8.1 or newer. Older skill instructions that infer health from
+pairing, process locks, message age, or `last_sync_activity_time` are outdated.
+Automated tests verify state transitions; they do not establish that a real
+phone has reconnected.
 
 ## CLI output changes
 

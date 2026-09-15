@@ -54,9 +54,9 @@ existing release tag):
 GOBIN="$HOME/.local/bin" go install github.com/fdsouvenir/gmcli@VERSION
 ```
 
-Keep `$HOME/.local/bin` on your PATH. For the proposed health-only v0.3.2 release,
-see [release notes and versioned installation](docs/releases/v0.3.2.md); do not
-install that tag before it is published. For local development:
+Keep `$HOME/.local/bin` on your PATH. See the
+[latest release](https://github.com/fdsouvenir/gmcli/releases/latest) for a
+versioned install command and upgrade notes. For local development:
 
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
@@ -115,11 +115,16 @@ same Google Account selected under **Google Messages → Device pairing**:
    and sign into the account selected on the phone. Do not navigate elsewhere.
 3. Open browser developer tools, reload once, select the `/web/config`
    request, and choose **Copy as cURL** (bash format).
-4. Put the copied command in a private file and authenticate:
+4. Put the copied command in a private file and authenticate. Treat it as
+   input text; do not execute the copied cURL command:
 
 ```sh
 umask 077
-pbpaste > gmessages-cookies.txt  # use your platform's clipboard command
+# Save the clipboard using your platform's command:
+# macOS: pbpaste > gmessages-cookies.txt
+# Linux/Wayland: wl-paste --no-newline > gmessages-cookies.txt
+# Linux/X11: xclip -selection clipboard -o > gmessages-cookies.txt
+chmod 600 gmessages-cookies.txt
 gmcli auth --cookies-file gmessages-cookies.txt
 ```
 
@@ -137,7 +142,10 @@ or chat messages.
 If `session.json` already contains a Gaia pairing, `gmcli auth` validates that
 the cookies belong to the same account and refreshes the session without a new
 emoji prompt. Pass `--new` to deliberately create a new phone pairing. A
-failed attempt leaves the existing session file unchanged.
+failed or cancelled attempt leaves the existing session file unchanged.
+On a successful fresh pairing, select the displayed emoji on your phone.
+Then run `gmcli sync --follow` to refresh the archive. Existing QR sessions
+can still be queried offline; running `auth` migrates to Google Account pairing.
 
 ### Sync and query
 
