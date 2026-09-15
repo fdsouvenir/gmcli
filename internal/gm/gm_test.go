@@ -91,7 +91,7 @@ func TestBuildSettingsSendTextRequest(t *testing.T) {
 	}
 	c.SetSettings(testSettings("sender-1"))
 
-	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "reply-1", "tmp-1")
+	req, err := c.buildSettingsSendTextRequest(context.Background(), "conv-1", "hello", "reply-1", "tmp-1")
 	if err != nil {
 		t.Fatalf("build settings request: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestBuildSettingsSendTextRequestUsesOnlySIMWhenConversationOmitsOutgoingID(
 	}
 	c.SetSettings(testSettings("sender-1"))
 
-	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	req, err := c.buildSettingsSendTextRequest(context.Background(), "conv-1", "hello", "", "tmp-1")
 	if err != nil {
 		t.Fatalf("build settings request: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBuildSettingsSendTextRequestForcesRCSForUnknownAutoConversationWithRCSS
 	}
 	c.SetSettings(testSettingsWithRCS("sender-1"))
 
-	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	req, err := c.buildSettingsSendTextRequest(context.Background(), "conv-1", "hello", "", "tmp-1")
 	if err != nil {
 		t.Fatalf("build settings request: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestBuildSettingsSendTextRequestDoesNotForceRCSForSMSConversation(t *testin
 	}
 	c.SetSettings(testSettingsWithRCS("sender-1"))
 
-	req, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1")
+	req, err := c.buildSettingsSendTextRequest(context.Background(), "conv-1", "hello", "", "tmp-1")
 	if err != nil {
 		t.Fatalf("build settings request: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestBuildSettingsSendTextRequestRejectsAmbiguousSIMWhenConversationOmitsOut
 	settings.SIMCards = append(settings.GetSIMCards(), testSettings("sender-2").GetSIMCards()[0])
 	c.SetSettings(settings)
 
-	if _, err := c.buildSettingsSendTextRequest("conv-1", "hello", "", "tmp-1"); err == nil {
+	if _, err := c.buildSettingsSendTextRequest(context.Background(), "conv-1", "hello", "", "tmp-1"); err == nil {
 		t.Fatalf("expected ambiguous SIM error")
 	}
 }

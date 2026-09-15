@@ -97,7 +97,7 @@ func sendTextCmd() *cobra.Command {
 					return err
 				}
 				if !cached {
-					if err := c.RequestUpdates(); err != nil {
+					if err := c.RequestUpdates(ctx); err != nil {
 						return fmt.Errorf("request phone send settings refresh: %w", err)
 					}
 				}
@@ -209,15 +209,15 @@ func runSendInspect(conversationID string) (sendInspectResult, error) {
 	if err := waitForConnected(ctx, client); err != nil {
 		return res, err
 	}
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("set active Google Messages session: %w", err)
 	}
 
-	conv, err := client.Underlying().GetConversation(conversationID)
+	conv, err := client.Underlying().GetConversation(ctx, conversationID)
 	if err != nil {
 		return res, fmt.Errorf("get conversation %s: %w", conversationID, err)
 	}
-	typeResp, err := client.Underlying().GetConversationType(conversationID)
+	typeResp, err := client.Underlying().GetConversationType(ctx, conversationID)
 	if err != nil {
 		return res, fmt.Errorf("get conversation type %s: %w", conversationID, err)
 	}
@@ -356,12 +356,12 @@ func runSendPreflight() (sendPreflightResult, error) {
 		return res, err
 	}
 	res.Connected = true
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("set active Google Messages session: %w", err)
 	}
 	res.RequestedActiveSession = true
 	res.SendReady = true
-	defaultSMS, err := client.IsDefaultSMSApp()
+	defaultSMS, err := client.IsDefaultSMSApp(ctx)
 	if err != nil {
 		res.Issues = append(res.Issues, fmt.Sprintf("default SMS app probe failed: %v", err))
 	} else {
@@ -462,7 +462,7 @@ func sendReactCmd() *cobra.Command {
 				action = gm.ReactionSwitch
 			}
 			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, _ *store.Store) error {
-				if err := c.SendReaction(msgID, emoji, action); err != nil {
+				if err := c.SendReaction(ctx, msgID, emoji, action); err != nil {
 					return err
 				}
 				if flags.jsonOut {
@@ -528,10 +528,10 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	if err := waitForReadySignal(ctx, ready, 5*time.Second); err != nil {
 		logger.Debug().Err(err).Msg("ClientReady not received before send grace period; continuing with connected session")
 	}
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return fmt.Errorf("set active Google Messages session: %w", err)
 	}
-	defaultSMS, err := client.IsDefaultSMSApp()
+	defaultSMS, err := client.IsDefaultSMSApp(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Default SMS app probe failed; continuing send")
 	} else if !defaultSMS {

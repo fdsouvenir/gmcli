@@ -25,7 +25,7 @@ type sendSettingsRefreshClient interface {
 	Connect() error
 	Disconnect()
 	IsConnected() bool
-	RequestUpdates() error
+	RequestUpdates(context.Context) error
 	WaitForSettings(context.Context) error
 }
 
@@ -81,7 +81,7 @@ func syncCmd() *cobra.Command {
 			}
 			defer client.Disconnect()
 
-			if resp, err := client.Underlying().ListContacts(); err != nil {
+			if resp, err := client.Underlying().ListContacts(ctx); err != nil {
 				logger.Warn().Err(err).Msg("Contact import failed")
 			} else {
 				validContacts, valid := contactSnapshotRows(resp)
@@ -94,7 +94,7 @@ func syncCmd() *cobra.Command {
 				logger.Info().Int("contacts", imported).Msg("Imported contacts")
 			}
 
-			if resp, err := client.Underlying().ListConversations(50, gmproto.ListConversationsRequest_INBOX); err != nil {
+			if resp, err := client.Underlying().ListConversations(ctx, 50, gmproto.ListConversationsRequest_INBOX); err != nil {
 				logger.Warn().Err(err).Msg("Conversation import failed")
 			} else {
 				validConversations, valid := conversationSnapshotRows(resp)
@@ -110,7 +110,7 @@ func syncCmd() *cobra.Command {
 					}
 					pump.Handle(conv)
 					convs++
-					if history, err := client.Underlying().FetchMessages(conv.GetConversationID(), 10, nil); err != nil {
+					if history, err := client.Underlying().FetchMessages(ctx, conv.GetConversationID(), 10, nil); err != nil {
 						logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
 					} else {
 						msgs += pump.ImportMessages(ctx, history.GetMessages())
@@ -225,7 +225,7 @@ func runSendSettingsRefresh(ctx context.Context, client sendSettingsRefreshClien
 		return res, err
 	}
 
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("request phone send settings refresh: %w", err)
 	}
 	res.RequestedRefresh = true

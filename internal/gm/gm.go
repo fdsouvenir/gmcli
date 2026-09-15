@@ -199,13 +199,13 @@ func (c *Client) SetSettings(settings *gmproto.Settings) {
 }
 
 // RequestUpdates asks the phone for a fresh GET_UPDATES payload.
-func (c *Client) RequestUpdates() error {
-	return c.libgm.SetActiveSession()
+func (c *Client) RequestUpdates(ctx context.Context) error {
+	return c.libgm.SetActiveSession(ctx)
 }
 
 // IsDefaultSMSApp asks the phone whether Google Messages is the default SMS app.
-func (c *Client) IsDefaultSMSApp() (bool, error) {
-	resp, err := c.libgm.IsBugleDefault()
+func (c *Client) IsDefaultSMSApp(ctx context.Context) (bool, error) {
+	resp, err := c.libgm.IsBugleDefault(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -267,7 +267,7 @@ func (c *Client) sendBuiltText(ctx context.Context, req *gmproto.SendMessageRequ
 	waitEcho, unsubscribe := c.watchMessageEcho(req.GetTmpID())
 	defer unsubscribe()
 
-	resp, err := c.sendMessage(req)
+	resp, err := c.sendMessage(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("libgm send: %w", err)
 	}
@@ -328,7 +328,7 @@ func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body,
 		return nil, "", fmt.Errorf("wait for phone send settings: %w", err)
 	}
 
-	req, err := c.buildSettingsSendTextRequest(conversationID, body, replyToID, tmpID)
+	req, err := c.buildSettingsSendTextRequest(ctx, conversationID, body, replyToID, tmpID)
 	if err != nil {
 		if requested == SendModeSettings {
 			return nil, "", err
@@ -338,8 +338,8 @@ func (c *Client) buildSendTextRequest(ctx context.Context, conversationID, body,
 	return req, SendModeSettings, nil
 }
 
-func (c *Client) buildSettingsSendTextRequest(conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, error) {
-	conv, err := c.getConversation(conversationID)
+func (c *Client) buildSettingsSendTextRequest(ctx context.Context, conversationID, body, replyToID, tmpID string) (*gmproto.SendMessageRequest, error) {
+	conv, err := c.getConversation(ctx, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("get conversation %s before send: %w", conversationID, err)
 	}
@@ -411,18 +411,18 @@ func buildLegacySendTextRequest(conversationID, body, replyToID, tmpID string) *
 	return req
 }
 
-func (c *Client) sendMessage(req *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+func (c *Client) sendMessage(ctx context.Context, req *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
 	if c.sendMessageHook != nil {
 		return c.sendMessageHook(req)
 	}
-	return c.libgm.SendMessage(req)
+	return c.libgm.SendMessage(ctx, req)
 }
 
-func (c *Client) getConversation(conversationID string) (*gmproto.Conversation, error) {
+func (c *Client) getConversation(ctx context.Context, conversationID string) (*gmproto.Conversation, error) {
 	if c.getConversationHook != nil {
 		return c.getConversationHook(conversationID)
 	}
-	return c.libgm.GetConversation(conversationID)
+	return c.libgm.GetConversation(ctx, conversationID)
 }
 
 func (c *Client) sendMetadataWaitDuration() time.Duration {
@@ -572,7 +572,7 @@ const (
 )
 
 // SendReaction adds, removes, or switches a unicode reaction on a message.
-func (c *Client) SendReaction(messageID, emoji string, action ReactionAction) error {
+func (c *Client) SendReaction(ctx context.Context, messageID, emoji string, action ReactionAction) error {
 	if messageID == "" {
 		return fmt.Errorf("message id is required")
 	}
@@ -590,7 +590,7 @@ func (c *Client) SendReaction(messageID, emoji string, action ReactionAction) er
 	default:
 		return fmt.Errorf("unknown reaction action %v", action)
 	}
-	_, err := c.libgm.SendReaction(&gmproto.SendReactionRequest{
+	_, err := c.libgm.SendReaction(ctx, &gmproto.SendReactionRequest{
 		MessageID:    messageID,
 		Action:       act,
 		ReactionData: &gmproto.ReactionData{Unicode: emoji},
@@ -717,7 +717,7 @@ func (c *libgmGaiaClient) ValidateConnection(ctx context.Context) error {
 
 	roundTrip := make(chan error, 1)
 	go func() {
-		_, err := c.IsBugleDefault()
+		_, err := c.IsBugleDefault(ctx)
 		roundTrip <- err
 	}()
 	select {
@@ -814,7 +814,7 @@ type gaiaStartResult struct {
 	err     error
 }
 
-// libgm v0.2605.0 waits for its initial long-poll callback without selecting
+// libgm v0.2608.0 waits for its initial long-poll callback without selecting
 // on the caller's context. Keep that dependency call behind a selectable
 // boundary so the CLI can honor its deadline and SIGINT. The caller's deferred
 // Disconnect closes an established poll before control returns.

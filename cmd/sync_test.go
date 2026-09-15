@@ -165,7 +165,7 @@ func (f *fakeSettingsClient) WaitForReady(context.Context) error {
 	return nil
 }
 
-func (f *fakeSettingsClient) RequestUpdates() error {
+func (f *fakeSettingsClient) RequestUpdates(context.Context) error {
 	f.requestCalls++
 	if f.settings != nil {
 		for _, h := range f.handlers {
