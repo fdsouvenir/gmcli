@@ -24,6 +24,10 @@ ClawHub/frontmatter slug is `google-messages-local-archive`.
 
 ## Installing
 
+Requires OpenClaw **2026.8.1 (OpenClaw 2.0) or newer** for OpenClaw use,
+and Go 1.25 or newer to install gmcli. The bundled runtime preflight checks
+OpenClaw and gmcli versions before archive queries.
+
 The exact install path depends on your harness:
 
 - **Claude Code** — copy or symlink `skills/google-messages` into your
@@ -35,7 +39,9 @@ The exact install path depends on your harness:
 - **OpenClaw** - drop the directory into your OpenClaw skills root and
   reload the agent. The frontmatter `name`
   (`google-messages-local-archive`) identifies the skill; `agents/openai.yaml`
-  provides the human-facing label where supported.
+  provides the human-facing label where supported. Install the published skill
+  with `openclaw skills install @fdsouvenir/google-messages-local-archive`, then
+  inspect availability with `openclaw skills check`.
 
 In all cases, the assistant must be able to run `gmcli` from its `Bash`
 tool. Verify with:
@@ -46,6 +52,26 @@ tool. Verify with:
 If the assistant runs in a sandbox, ensure `gmcli` is on the sandbox's
 `PATH` and that the sandbox can read `$XDG_STATE_HOME/gmcli` (or the
 directory passed via `--store`).
+
+## OpenClaw 2.0 compatibility
+
+The skill uses OpenClaw's supported YAML `metadata.openclaw` dependency and Go
+installer fields. Version and descriptive compatibility information live under
+`metadata`; the registry version is supplied separately with `--version`.
+OpenClaw 2026.8.1's skill validator rejects a top-level `version` key and does
+not implement a skill minimum-runtime-version field. The bundled
+`scripts/check-runtime.sh` enforces the minimum runtime before queries, rather
+than relying on an ignored field. It reads version output only.
+
+Validate the bundle with the `skills/skill-creator/scripts/quick_validate.py`
+from the official OpenClaw v2026.8.1 source, plus `go test ./skills` for the
+runtime preflight and repository metadata tests. The canonical frontmatter
+name is also the ClawHub installation directory name; the repository keeps its
+historical folder for existing symlinks.
+
+Sources: [OpenClaw skills](https://docs.openclaw.ai/tools/skills),
+[OpenClaw 2.0 skills changes](https://docs.openclaw.ai/releases/2026.8.1/skills),
+[ClawHub skill format](https://docs.openclaw.ai/clawhub/skill-format).
 
 ## Maintainer ClawHub Publishing
 
@@ -61,22 +87,22 @@ clawhub skill publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 0.3.1 \
-  --changelog "Add send readiness diagnostics, QR PNG pairing output, current Google Messages protocol library support, and strict real-SIM send metadata handling." \
+  --version 1.0.0 \
+  --changelog "Replace retired QR pairing with Google Account emoji authentication; require OpenClaw 2026.8.1 or newer; validate runtime compatibility and use evidence-based archive health guidance." \
   --tags latest,gmcli,google-messages,local,archive,sms,rcs,search,summarize,privacy
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 0.3.1 --files
+clawhub inspect google-messages-local-archive --version 1.0.0 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 0.3.1
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 1.0.0
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```

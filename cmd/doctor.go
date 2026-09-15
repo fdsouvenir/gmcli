@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
 
@@ -17,6 +18,8 @@ import (
 )
 
 type doctorReport struct {
+	AuthMode             string       `json:"auth_mode,omitempty"`
+	Account              string       `json:"account,omitempty"`
 	Health               store.Health `json:"health"`
 	HealthStatus         string       `json:"health_status"`
 	PairingMode          string       `json:"pairing_mode"`
@@ -47,6 +50,8 @@ func doctorCmd() *cobra.Command {
 		Long: "Run a non-network self-check: does the session file exist and contain " +
 			"a paired device? Does the SQLite store open and report a healthy schema? " +
 			"Report separate process, transport and phone evidence; cached pairing is not connectivity.",
+		Example: "  gmcli doctor\n  gmcli --json doctor",
+		Args:    noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signalContext(context.Background())
 			defer cancel()
@@ -91,11 +96,8 @@ func runDoctor(ctx context.Context) doctorReport {
 			snap, err := client.AuthSnapshot()
 			if err == nil && snap != nil && snap.Browser != nil {
 				r.Paired = true
-				r.PairingMode = "legacy_qr"
-				if snap.IsGoogleAccount() {
-					r.PairingMode = "gaia"
-				}
-				r.PhoneID = snap.Mobile.GetSourceID()
+				populateDoctorAuthIdentity(&r, snap)
+
 			}
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
@@ -162,6 +164,17 @@ func runDoctor(ctx context.Context) doctorReport {
 	return r
 }
 
+func populateDoctorAuthIdentity(report *doctorReport, auth *libgm.AuthData) {
+	defer func() { report.PairingMode = report.AuthMode }()
+	if auth.IsGoogleAccount() {
+		report.AuthMode = "gaia"
+		report.Account = auth.Mobile.GetSourceID()
+	} else {
+		report.AuthMode = "legacy_qr"
+		report.PhoneID = auth.Mobile.GetSourceID()
+	}
+}
+
 func renderDoctor(r doctorReport) {
 	fmt.Println("gmcli doctor")
 	fmt.Println("============")
@@ -170,6 +183,12 @@ func renderDoctor(r doctorReport) {
 	fmt.Printf("  health:           %s (offline evidence only)\n", r.HealthStatus)
 	fmt.Printf("  pairing mode:     %s\n", r.PairingMode)
 	fmt.Printf("  paired:           %v\n", r.Paired)
+	if r.AuthMode != "" {
+		fmt.Printf("  auth mode:        %s\n", r.AuthMode)
+	}
+	if r.Account != "" {
+		fmt.Printf("  account:          %s\n", r.Account)
+	}
 	if r.PhoneID != "" {
 		fmt.Printf("  phone id:         %s\n", r.PhoneID)
 	}

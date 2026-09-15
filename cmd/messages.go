@@ -35,14 +35,20 @@ func messagesListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List messages, most recent first by default",
+		Example: "  gmcli messages list --limit 20\n" +
+			"  gmcli --json messages list --conv <conversation-id> --since 2026-08-01",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			since, err := parseFlagTime(sinceStr)
 			if err != nil {
-				return fmt.Errorf("--since: %w", err)
+				return usageErrorf("--since: %v", err)
 			}
 			until, err := parseFlagTime(untilStr)
 			if err != nil {
-				return fmt.Errorf("--until: %w", err)
+				return usageErrorf("--until: %v", err)
+			}
+			if order != "asc" && order != "desc" {
+				return usageErrorf("--order must be asc or desc")
 			}
 			st, err := openStore()
 			if err != nil {
@@ -78,7 +84,9 @@ func messagesSearchCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Full-text search messages (FTS5 syntax)",
-		Args:  cobra.MinimumNArgs(1),
+		Example: "  gmcli messages search \"dinner plans\"\n" +
+			"  gmcli --json messages search invoice --limit 25",
+		Args: minimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := joinArgs(args)
 			st, err := openStore()
@@ -94,7 +102,7 @@ func messagesSearchCmd() *cobra.Command {
 				return output.JSON(os.Stdout, hits)
 			}
 			if len(hits) == 0 {
-				fmt.Fprintln(os.Stderr, "(no matches)")
+				fmt.Fprintf(os.Stdout, "messages: 0 matches for %q\n", query)
 				return nil
 			}
 			rows := make([][]string, 0, len(hits))
@@ -122,7 +130,7 @@ func messagesShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <message-id>",
 		Short: "Show a single message in full",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore()
 			if err != nil {
@@ -150,8 +158,11 @@ func messagesContextCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "context <message-id>",
 		Short: "Show neighboring messages around a message id",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if before < 0 || after < 0 {
+				return usageErrorf("--before and --after must be non-negative")
+			}
 			st, err := openStore()
 			if err != nil {
 				return err
@@ -178,7 +189,7 @@ func renderMessages(msgs []store.Message) error {
 		return output.JSON(os.Stdout, msgs)
 	}
 	if len(msgs) == 0 {
-		fmt.Fprintln(os.Stderr, "(no messages)")
+		fmt.Fprintln(os.Stdout, "messages: 0 found")
 		return nil
 	}
 	rows := make([][]string, 0, len(msgs))

@@ -13,6 +13,9 @@ import (
 // -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=vX.Y.Z"
 var Version = "dev"
 
+// CurrentVersion returns the injected release version for fast CLI probes.
+func CurrentVersion() string { return buildInfo().Version }
+
 const licenseNotice = "gmcli is licensed under GNU AGPL-3.0. " +
 	"It depends on libgm from mautrix/gmessages (AGPL-3.0, " +
 	"Copyright (C) Tulir Asokan and contributors). " +
@@ -31,6 +34,7 @@ func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print version, build info, and license notice",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info := buildInfo()
 			if flags.jsonOut {

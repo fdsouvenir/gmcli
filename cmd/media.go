@@ -33,9 +33,10 @@ func mediaDownloadCmd() *cobra.Command {
 			"from Google's CDN, decrypts them with the per-message key stored " +
 			"during sync, and writes the result to disk. Defaults to " +
 			"$STORE/media/<message_id>.<ext>; override with --out.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if msgID == "" {
-				return fmt.Errorf("--message is required")
+				return usageErrorf("--message is required")
 			}
 			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, st *store.Store) error {
 				m, err := st.GetMessage(ctx, msgID)

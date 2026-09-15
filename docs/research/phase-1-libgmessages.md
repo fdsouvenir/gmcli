@@ -4,6 +4,10 @@
 **Branch:** `claude/research-libgmessages-nF13t`
 **Status:** Complete — recommendation at end.
 
+> **2026-08 update:** Google has retired QR pairing. gmcli now uses the Google
+> Account (Gaia) flow exclusively for new authentication. The QR notes below
+> are retained as historical protocol research, not current user guidance.
+
 ## TL;DR
 
 - **Package name:** `pkg/libgm` (not `libgmessages`). Importable as `go.mau.fi/mautrix-gmessages/pkg/libgm`.
@@ -61,7 +65,7 @@ Two flows, both fully implemented in libgm:
 
 | Flow              | Method                                | Output to user             |
 | ----------------- | ------------------------------------- | -------------------------- |
-| QR (browser-like) | `StartLogin()` → QR string            | scan QR with phone         |
+| QR (retired)      | `StartLogin()` → QR string            | no longer available        |
 | Google Account    | `DoGaiaPairing(ctx, emojiCallback)`   | confirm 2-character emoji  |
 
 Both deliver `*events.PairSuccessful` to the event handler when complete; AuthData is mutated in place. After pairing, call `Connect()`.
@@ -192,10 +196,12 @@ correct. Two distinct token lifetimes exist:
 1. **Tachyon auth token** — short-lived (~24h). libgm refreshes this
    automatically and emits `events.AuthTokenRefreshed`; consumer's only job is
    to persist the updated AuthData on that event. No user action.
-2. **Browser pairing** — Google invalidates browser pairings after ~14 days
-   of inactivity. Reflected in `events.GaiaLoggedOut` →`gmcli auth` must
-   re-run the QR/Gaia flow. Consumer cannot prevent this; phone must be online
-   periodically for libgm to keep the pairing alive.
+2. **Device pairing** — Google invalidates inactive pairings after a period of
+   inactivity. QR can no longer establish a replacement session; current
+   versions must use Gaia cookies and phone-side emoji confirmation.
+   Reflected in `events.GaiaLoggedOut` →`gmcli auth` must re-run the Gaia flow.
+   Consumer cannot prevent this; the phone must be online periodically for
+   libgm to keep the pairing alive.
 
 Implementation implication for gmcli: persist AuthData on every
 `AuthTokenRefreshed`. Treat `GaiaLoggedOut` as fatal in the `sync --follow`

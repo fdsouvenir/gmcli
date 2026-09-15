@@ -32,6 +32,9 @@ func chatsListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List conversations, most recently active first",
+		Example: "  gmcli chats list --limit 20\n" +
+			"  gmcli --json chats list --unread-only",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore()
 			if err != nil {
@@ -50,7 +53,7 @@ func chatsListCmd() *cobra.Command {
 				return output.JSON(os.Stdout, convs)
 			}
 			if len(convs) == 0 {
-				fmt.Fprintln(os.Stderr, "(no conversations)")
+				fmt.Fprintln(os.Stdout, "conversations: 0 found")
 				return nil
 			}
 			rows := make([][]string, 0, len(convs))
@@ -85,7 +88,9 @@ func chatsShowCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "show <conversation-id>",
 		Short: "Show a conversation header and its most recent messages",
-		Args:  cobra.ExactArgs(1),
+		Example: "  gmcli chats show <conversation-id>\n" +
+			"  gmcli --full chats show <conversation-id> --limit 100",
+		Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore()
 			if err != nil {
@@ -139,7 +144,7 @@ func renderChatDetail(c store.Conversation, msgs []store.Message) {
 	fmt.Printf("participants:    %s\n", participantSummary(c.ParticipantsJSON))
 	fmt.Println()
 	if len(msgs) == 0 {
-		fmt.Fprintln(os.Stderr, "(no messages)")
+		fmt.Fprintf(os.Stdout, "messages: 0 found in conversation %s\n", c.ID)
 		return
 	}
 	_ = renderMessages(msgs)

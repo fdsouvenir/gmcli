@@ -25,7 +25,7 @@ type sendSettingsRefreshClient interface {
 	Connect() error
 	Disconnect()
 	IsConnected() bool
-	RequestUpdates() error
+	RequestUpdates(context.Context) error
 	WaitForSettings(context.Context) error
 }
 
@@ -50,6 +50,7 @@ func syncCmd() *cobra.Command {
 			"conversations, messages, and contacts into the SQLite store. With --follow, " +
 			"the connection stays open until interrupted; without it, the command runs the " +
 			"initial-sync pass and exits.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			layout, err := resolveLayout()
 			if err != nil {
@@ -80,7 +81,7 @@ func syncCmd() *cobra.Command {
 			}
 			defer client.Disconnect()
 
-			if resp, err := client.Underlying().ListContacts(); err != nil {
+			if resp, err := client.Underlying().ListContacts(ctx); err != nil {
 				logger.Warn().Err(err).Msg("Contact import failed")
 			} else {
 				validContacts, valid := contactSnapshotRows(resp)
@@ -93,7 +94,7 @@ func syncCmd() *cobra.Command {
 				logger.Info().Int("contacts", imported).Msg("Imported contacts")
 			}
 
-			if resp, err := client.Underlying().ListConversations(50, gmproto.ListConversationsRequest_INBOX); err != nil {
+			if resp, err := client.Underlying().ListConversations(ctx, 50, gmproto.ListConversationsRequest_INBOX); err != nil {
 				logger.Warn().Err(err).Msg("Conversation import failed")
 			} else {
 				validConversations, valid := conversationSnapshotRows(resp)
@@ -109,7 +110,7 @@ func syncCmd() *cobra.Command {
 					}
 					pump.Handle(conv)
 					convs++
-					if history, err := client.Underlying().FetchMessages(conv.GetConversationID(), 10, nil); err != nil {
+					if history, err := client.Underlying().FetchMessages(ctx, conv.GetConversationID(), 10, nil); err != nil {
 						logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
 					} else {
 						msgs += pump.ImportMessages(ctx, history.GetMessages())
@@ -157,6 +158,7 @@ func syncSendSettingsCmd() *cobra.Command {
 		Long: "Open the paired Google Messages session, request a send-settings refresh " +
 			"from the phone, and wait for real Settings/SIM metadata. This is a read-only " +
 			"network diagnostic: it updates only gmcli's local cache and never sends SMS.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			layout, err := resolveLayout()
 			if err != nil {
@@ -223,7 +225,7 @@ func runSendSettingsRefresh(ctx context.Context, client sendSettingsRefreshClien
 		return res, err
 	}
 
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("request phone send settings refresh: %w", err)
 	}
 	res.RequestedRefresh = true

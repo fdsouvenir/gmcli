@@ -83,9 +83,10 @@ func sendTextCmd() *cobra.Command {
 			"Optionally `--reply-to <message_id>` to render the message as a " +
 			"quoted reply. Requires `--read-only=false` to be passed at the " +
 			"root since gmcli is read-only by default.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" || message == "" {
-				return fmt.Errorf("--to and --message are required")
+				return usageErrorf("--to and --message are required")
 			}
 			if err := requireWritable(); err != nil {
 				return err
@@ -96,7 +97,7 @@ func sendTextCmd() *cobra.Command {
 					return err
 				}
 				if !cached {
-					if err := c.RequestUpdates(); err != nil {
+					if err := c.RequestUpdates(ctx); err != nil {
 						return fmt.Errorf("request phone send settings refresh: %w", err)
 					}
 				}
@@ -138,9 +139,10 @@ func sendInspectCmd() *cobra.Command {
 		Short: "Inspect live send metadata for a conversation",
 		Long: "Open the paired Google Messages session and inspect sanitized live send metadata " +
 			"for a conversation without sending SMS.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if to == "" {
-				return fmt.Errorf("--to is required")
+				return usageErrorf("--to is required")
 			}
 			res, err := runSendInspect(to)
 			if flags.jsonOut {
@@ -207,15 +209,15 @@ func runSendInspect(conversationID string) (sendInspectResult, error) {
 	if err := waitForConnected(ctx, client); err != nil {
 		return res, err
 	}
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("set active Google Messages session: %w", err)
 	}
 
-	conv, err := client.Underlying().GetConversation(conversationID)
+	conv, err := client.Underlying().GetConversation(ctx, conversationID)
 	if err != nil {
 		return res, fmt.Errorf("get conversation %s: %w", conversationID, err)
 	}
-	typeResp, err := client.Underlying().GetConversationType(conversationID)
+	typeResp, err := client.Underlying().GetConversationType(ctx, conversationID)
 	if err != nil {
 		return res, fmt.Errorf("get conversation type %s: %w", conversationID, err)
 	}
@@ -291,6 +293,7 @@ func sendPreflightCmd() *cobra.Command {
 		Long: "Open the paired Google Messages session and check live send readiness " +
 			"without sending SMS. This command is read-only; it may refresh local " +
 			"Settings/SIM metadata in the gmcli store.",
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := runSendPreflight()
 			if flags.jsonOut {
@@ -353,12 +356,12 @@ func runSendPreflight() (sendPreflightResult, error) {
 		return res, err
 	}
 	res.Connected = true
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return res, fmt.Errorf("set active Google Messages session: %w", err)
 	}
 	res.RequestedActiveSession = true
 	res.SendReady = true
-	defaultSMS, err := client.IsDefaultSMSApp()
+	defaultSMS, err := client.IsDefaultSMSApp(ctx)
 	if err != nil {
 		res.Issues = append(res.Issues, fmt.Sprintf("default SMS app probe failed: %v", err))
 	} else {
@@ -440,12 +443,13 @@ func sendReactCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "react",
 		Short: "Add, remove, or switch a reaction on a message",
+		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if msgID == "" || emoji == "" {
-				return fmt.Errorf("--message and --emoji are required")
+				return usageErrorf("--message and --emoji are required")
 			}
 			if remove && switchAct {
-				return fmt.Errorf("--remove and --switch are mutually exclusive")
+				return usageErrorf("--remove and --switch are mutually exclusive")
 			}
 			if err := requireWritable(); err != nil {
 				return err
@@ -458,7 +462,7 @@ func sendReactCmd() *cobra.Command {
 				action = gm.ReactionSwitch
 			}
 			return runWithConnectedClient(func(ctx context.Context, c *gm.Client, _ *store.Store) error {
-				if err := c.SendReaction(msgID, emoji, action); err != nil {
+				if err := c.SendReaction(ctx, msgID, emoji, action); err != nil {
 					return err
 				}
 				if flags.jsonOut {
@@ -524,10 +528,10 @@ func runWithConnectedClient(fn func(ctx context.Context, c *gm.Client, st *store
 	if err := waitForReadySignal(ctx, ready, 5*time.Second); err != nil {
 		logger.Debug().Err(err).Msg("ClientReady not received before send grace period; continuing with connected session")
 	}
-	if err := client.RequestUpdates(); err != nil {
+	if err := client.RequestUpdates(ctx); err != nil {
 		return fmt.Errorf("set active Google Messages session: %w", err)
 	}
-	defaultSMS, err := client.IsDefaultSMSApp()
+	defaultSMS, err := client.IsDefaultSMSApp(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Default SMS app probe failed; continuing send")
 	} else if !defaultSMS {
