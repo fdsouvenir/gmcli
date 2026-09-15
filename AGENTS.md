@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`gmcli` is a Go 1.24 CLI for Google Messages. `main.go` wires into the Cobra command tree in `cmd/`. Keep user-facing verbs and flags in `cmd/`, and reusable implementation in `internal/`:
+`gmcli` is a Go 1.25 CLI for Google Messages. `main.go` wires into the Cobra command tree in `cmd/`. Keep user-facing verbs and flags in `cmd/`, and reusable implementation in `internal/`:
 
 - `internal/gm/`: session, pairing, sync events, send/react, media.
 - `internal/store/`: SQLite schema, queries, aliases, message/contact persistence.

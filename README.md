@@ -52,9 +52,9 @@ existing release tag):
 GOBIN="$HOME/.local/bin" go install github.com/fdsouvenir/gmcli@VERSION
 ```
 
-Keep `$HOME/.local/bin` on your PATH. For the proposed health-only v0.3.2 release,
-see [release notes and versioned installation](docs/releases/v0.3.2.md); do not
-install that tag before it is published. For local development:
+Keep `$HOME/.local/bin` on your PATH. See the
+[latest release](https://github.com/fdsouvenir/gmcli/releases/latest) for a
+versioned install command and upgrade notes. For local development:
 
 ```sh
 git clone https://github.com/fdsouvenir/gmcli

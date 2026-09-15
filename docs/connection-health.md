@@ -88,10 +88,10 @@ with its real-device release gate unchanged.
 current refresh times out. Cache availability remains separate from a successful
 response during this run. Send/reaction opt-in protections are unchanged.
 
-The archive skill is independently versioned and is not republished here.
-Older skill instructions that infer health from pairing, process locks, message
-age, or `last_sync_activity_time` are outdated; use these evidence semantics.
-No live-device validation or reconnection is claimed by this patch.
+The archive skill follows these same evidence semantics. Older skill versions
+that infer health from pairing, process locks, message age, or
+`last_sync_activity_time` are outdated; update the ClawHub skill alongside gmcli.
+No live-device validation or reconnection is claimed by this health update.
 
 ## CLI output changes
 
