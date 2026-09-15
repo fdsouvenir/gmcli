@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/fdsouvenir/gmcli/internal/paths"
-	"github.com/fdsouvenir/gmcli/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fdsouvenir/gmcli/internal/paths"
+	"github.com/fdsouvenir/gmcli/internal/store"
 )
 
 const completeCookieJSON = `{
@@ -155,5 +156,91 @@ func TestPairingInvalidatesPriorHealthWithoutNetwork(t *testing.T) {
 	}
 	if status, _ := h.Assessment(time.Now()); status != "unhealthy" || h.Invalidation != "session_changed" {
 		t.Fatalf("prior health retained: %+v", h)
+	}
+}
+
+func TestAuthWithoutFlagsStartsBrowserWithoutCookieFile(t *testing.T) {
+	want := errors.New("sign-in cancelled by test")
+	called := false
+	cmd := authCmdWithBrowser(func(ctx context.Context, path string) (map[string]string, error) {
+		called = true
+		if path != "" {
+			t.Fatalf("default browser path = %q", path)
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("browser sign-in has no timeout")
+		}
+		return nil, want
+	})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); !errors.Is(err, want) || !called {
+		t.Fatalf("default auth did not launch browser: called=%v err=%v", called, err)
+	}
+	if !strings.Contains(out.String(), "Sign in") || strings.Contains(out.String(), "required") {
+		t.Fatalf("unexpected default instructions: %s", out.String())
+	}
+}
+
+func TestAuthRejectsConflictingOptionsBeforeBrowserLaunch(t *testing.T) {
+	for _, args := range [][]string{
+		{"--browser", "chrome", "--cookies-file", "-"},
+		{"--browser-timeout", "0s"},
+	} {
+		cmd := authCmdWithBrowser(func(context.Context, string) (map[string]string, error) {
+			t.Fatal("browser launched with invalid options")
+			return nil, nil
+		})
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err == nil {
+			t.Fatalf("accepted invalid options %v", args)
+		}
+	}
+}
+
+func TestMissingCookieFileSuggestsBrowserSignIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-created.json")
+	_, err := readCookieInput(path, strings.NewReader(""), false)
+	if err == nil || !strings.Contains(err.Error(), "run gmcli auth without --cookies-file") {
+		t.Fatalf("missing file error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("created an empty credential file")
+	}
+}
+
+func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	layout, err := resolveLayout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.Session, []byte("saved-session-sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := authCmdWithBrowser(func(context.Context, string) (map[string]string, error) {
+		cancel()
+		return parseGoogleCookies([]byte(completeCookieJSON))
+	})
+	cmd.SetContext(ctx)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled sign-in error = %v", err)
+	}
+	saved, err := os.ReadFile(layout.Session)
+	if err != nil || string(saved) != "saved-session-sentinel" {
+		t.Fatal("cancelled browser sign-in changed saved session")
+	}
+	if strings.Contains(out.String(), "secret") {
+		t.Fatal("browser result leaked cookie values")
 	}
 }

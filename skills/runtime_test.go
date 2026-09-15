@@ -21,15 +21,15 @@ func TestRuntimeCompatibilityPreflight(t *testing.T) {
 		name, openclaw, gmcli, wantError string
 		failVersion                      bool
 	}{
-		{name: "minimum", openclaw: "OpenClaw 2026.8.1", gmcli: "gmcli v1.0.0"},
-		{name: "newer", openclaw: "2026.10.1", gmcli: "gmcli v1.0.0"},
-		{name: "build metadata", openclaw: "v2026.8.1+build.7", gmcli: "gmcli v1.0.0"},
-		{name: "old openclaw", openclaw: "2026.7.9", gmcli: "gmcli v1.0.0", wantError: "openclaw 2026.8.1 or newer"},
-		{name: "old gmcli", openclaw: "2026.8.1", gmcli: "gmcli v0.3.2", wantError: "gmcli 1.0.0 or newer"},
-		{name: "prerelease", openclaw: "2026.8.1-beta.3", gmcli: "gmcli v1.0.0", wantError: "openclaw 2026.8.1 or newer"},
+		{name: "minimum", openclaw: "OpenClaw 2026.8.1", gmcli: "gmcli v1.1.0"},
+		{name: "newer", openclaw: "2026.10.1", gmcli: "gmcli v1.1.0"},
+		{name: "build metadata", openclaw: "v2026.8.1+build.7", gmcli: "gmcli v1.1.0"},
+		{name: "old openclaw", openclaw: "2026.7.9", gmcli: "gmcli v1.1.0", wantError: "openclaw 2026.8.1 or newer"},
+		{name: "old gmcli", openclaw: "2026.8.1", gmcli: "gmcli v1.0.0", wantError: "gmcli 1.1.0 or newer"},
+		{name: "prerelease", openclaw: "2026.8.1-beta.3", gmcli: "gmcli v1.1.0", wantError: "openclaw 2026.8.1 or newer"},
 		{name: "unversioned", openclaw: "2026.8.1", gmcli: "gmcli dev", wantError: "Could not identify a released gmcli version"},
-		{name: "missing runtime", gmcli: "gmcli v1.0.0", wantError: "openclaw is required"},
-		{name: "failed version command", openclaw: "2026.8.1", gmcli: "gmcli v1.0.0", failVersion: true, wantError: "Could not read openclaw version"},
+		{name: "missing runtime", gmcli: "gmcli v1.1.0", wantError: "openclaw is required"},
+		{name: "failed version command", openclaw: "2026.8.1", gmcli: "gmcli v1.1.0", failVersion: true, wantError: "Could not read openclaw version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

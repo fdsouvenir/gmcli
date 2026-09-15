@@ -7,11 +7,12 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/fdsouvenir/gmcli/internal/browserauth"
 	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/output"
 	"github.com/fdsouvenir/gmcli/internal/paths"
@@ -20,16 +21,17 @@ import (
 
 const maxCookieInputBytes = 1 << 20
 
-var (
-	requiredGoogleCookies = []string{"SID", "HSID", "SSID", "OSID", "APISID", "SAPISID"}
-	allowedGoogleCookies  = map[string]struct{}{
-		"SID": {}, "HSID": {}, "SSID": {}, "OSID": {}, "APISID": {}, "SAPISID": {},
-		"__Secure-1PSIDTS": {},
-	}
-	cookieHeaderPattern = regexp.MustCompile(`(?i)(?:cookie\s*:\s*|(?:--cookie|-b)\s+['"])([^'"\r\n]+)`)
-)
+var cookieHeaderPattern = regexp.MustCompile(`(?i)(?:cookie\s*:\s*|(?:--cookie|-b)\s+['"])([^'"\r\n]+)`)
+
+type browserSignIn func(context.Context, string) (map[string]string, error)
 
 func authCmd() *cobra.Command {
+	return authCmdWithBrowser(browserauth.SignIn)
+}
+
+func authCmdWithBrowser(signIn browserSignIn) *cobra.Command {
+	var browserPath string
+	var browserTimeout time.Duration
 	var cookieFile string
 	var forceNew bool
 	var allowInsecure bool
@@ -37,24 +39,50 @@ func authCmd() *cobra.Command {
 		Use:   "auth",
 		Short: "Pair with Google Messages using a Google Account",
 		Long: "Pair gmcli using the Google Account/emoji flow used by Messages for Web. " +
-			"Export the /web/config request from a private browser window as cURL, or provide " +
-			"a JSON object containing the required Google cookies. Cookie values are persisted " +
-			"inside $STORE/session.json (mode 0600) and are never printed.",
-		Example: "  gmcli auth --cookies-file ~/private/gmessages-cookies.json\n" +
-			"  pbpaste | gmcli auth --cookies-file -\n" +
-			"  gmcli auth --cookies-file cookies.txt --new",
+			"Run gmcli auth to open a temporary Chrome, Chromium or Edge window, sign in " +
+			"with the account selected on your phone, then tap the matching emoji. " +
+			"The browser closes automatically; no cookie file is needed. " +
+			"An existing pairing is refreshed when possible.\n\n" +
+			"For remote servers or manual input, --cookies-file accepts JSON or a copied " +
+			"/web/config cURL request; - reads stdin. See the README's manual sign-in instructions. " +
+			"Credentials are saved only in $STORE/session.json (mode 0600) and are never printed.",
+		Example: "  gmcli auth\n" +
+			"  gmcli auth --new\n" +
+			"  gmcli auth --browser /path/to/chrome\n" +
+			"  pbpaste | gmcli auth --cookies-file -",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if cookieFile == "" {
-				return usageErrorf("--cookies-file is required; use - to read JSON or copied cURL from stdin")
+			if browserTimeout <= 0 {
+				return usageErrorf("--browser-timeout must be greater than zero")
 			}
-			raw, err := readCookieInput(cookieFile, cmd.InOrStdin(), allowInsecure)
-			if err != nil {
+			ctx, cancel := signalContext(cmd.Context())
+			defer cancel()
+
+			var cookies map[string]string
+			var err error
+			if cookieFile != "" {
+				var raw []byte
+				raw, err = readCookieInput(cookieFile, cmd.InOrStdin(), allowInsecure)
+				if err != nil {
+					return err
+				}
+				cookies, err = parseGoogleCookies(raw)
+				if err != nil {
+					return wrapUsage(err)
+				}
+			} else {
+				fmt.Fprintln(cmd.ErrOrStderr(), "Opening a temporary sign-in browser...")
+				fmt.Fprintln(cmd.ErrOrStderr(), "Sign in with the Google Account selected under Google Messages → Device pairing on your phone.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "The window will close automatically when sign-in is complete. Ctrl-C cancels.")
+				browserCtx, cancelBrowser := context.WithTimeout(ctx, browserTimeout)
+				cookies, err = signIn(browserCtx, browserPath)
+				cancelBrowser()
+				if err != nil {
+					return err
+				}
+			}
+			if err := ctx.Err(); err != nil {
 				return err
-			}
-			cookies, err := parseGoogleCookies(raw)
-			if err != nil {
-				return wrapUsage(err)
 			}
 
 			layout, err := resolveLayout()
@@ -62,8 +90,6 @@ func authCmd() *cobra.Command {
 				return err
 			}
 			logger := newLogger()
-			ctx, cancel := signalContext(context.Background())
-			defer cancel()
 
 			if err := invalidatePairingHealth(ctx, layout); err != nil {
 				return err
@@ -86,9 +112,12 @@ func authCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&browserPath, "browser", "", "Chrome, Chromium or Edge executable for browser sign-in (auto-detected by default)")
+	c.Flags().DurationVar(&browserTimeout, "browser-timeout", 5*time.Minute, "time allowed to sign in in the browser")
 	c.Flags().StringVar(&cookieFile, "cookies-file", "", "cookie JSON or copied cURL file; use - for stdin")
 	c.Flags().BoolVar(&forceNew, "new", false, "create a new phone pairing instead of refreshing an existing Gaia session")
 	c.Flags().BoolVar(&allowInsecure, "allow-insecure-cookie-file", false, "allow group/world-readable cookie input files")
+	c.MarkFlagsMutuallyExclusive("browser", "cookies-file")
 	return c
 }
 
@@ -98,6 +127,9 @@ func readCookieInput(path string, stdin io.Reader, allowInsecure bool) ([]byte, 
 	}
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("cookie input file does not exist; run gmcli auth without --cookies-file for browser sign-in")
+		}
 		return nil, fmt.Errorf("open cookie input: %w", err)
 	}
 	if !info.Mode().IsRegular() {
@@ -158,23 +190,7 @@ func parseGoogleCookies(raw []byte) (map[string]string, error) {
 		}
 	}
 
-	filtered := make(map[string]string, len(allowedGoogleCookies))
-	for name, value := range parsed {
-		if _, ok := allowedGoogleCookies[name]; ok && strings.TrimSpace(value) != "" {
-			filtered[name] = value
-		}
-	}
-	var missing []string
-	for _, name := range requiredGoogleCookies {
-		if filtered[name] == "" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return nil, fmt.Errorf("cookie input is missing required names: %s", strings.Join(missing, ", "))
-	}
-	return filtered, nil
+	return browserauth.FilterCookies(parsed)
 }
 
 func invalidatePairingHealth(ctx context.Context, layout paths.Layout) error {
