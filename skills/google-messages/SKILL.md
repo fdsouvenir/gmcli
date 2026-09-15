@@ -98,7 +98,7 @@ instruction layer published from the canonical gmcli repository.
   any write command from this skill.
 - Pairing or syncing the archive ("connect my phone", "sync messages"). Tell
   the user to follow gmcli's Google Account pairing instructions and run
-  `gmcli auth --cookies-file {private_file}` or `gmcli sync --follow`
+  `gmcli auth` (browser sign-in and phone emoji confirmation) or `gmcli sync --follow`
   themselves; do not run those yourself. Never ask the user to paste Google
   cookies or `session.json` into chat, and never read either one.
 - Setting aliases or labels ("call her Mom from now on"). Do not run them

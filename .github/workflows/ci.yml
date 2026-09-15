@@ -29,5 +29,10 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Browser sign-in fixture
+        env:
+          GMCLI_BROWSER_TEST: "1"
+        run: go test -race ./internal/browserauth
+
       - name: Vet
         run: go vet ./...

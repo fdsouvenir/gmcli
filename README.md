@@ -105,52 +105,82 @@ See [health semantics and schema compatibility](docs/connection-health.md).
 
 ### Pair with a Google Account
 
-QR pairing has been retired by Google. Gaia pairing needs cookies from the
-same Google Account selected under **Google Messages → Device pairing**:
-
-1. Open a private Firefox window. Chrome sessions with Device Bound Session
-   Credentials enabled may not export reusable cookies.
-2. Visit
-   <https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config>
-   and sign into the account selected on the phone. Do not navigate elsewhere.
-3. Open browser developer tools, reload once, select the `/web/config`
-   request, and choose **Copy as cURL** (bash format).
-4. Put the copied command in a private file and authenticate. Treat it as
-   input text; do not execute the copied cURL command:
+Run:
 
 ```sh
-umask 077
-# Save the clipboard using your platform's command:
-# macOS: pbpaste > gmessages-cookies.txt
-# Linux/Wayland: wl-paste --no-newline > gmessages-cookies.txt
-# Linux/X11: xclip -selection clipboard -o > gmessages-cookies.txt
-chmod 600 gmessages-cookies.txt
-gmcli auth --cookies-file gmessages-cookies.txt
+gmcli auth
 ```
 
-Alternatively, pipe the copied cURL without creating another file:
+1. gmcli opens a temporary Chrome, Chromium, or Edge window.
+2. Sign in with the same Google Account selected under **Google Messages →
+   Device pairing** on your phone. Complete any Google verification prompts.
+3. The window closes automatically. For a new pairing, select the matching
+   emoji shown in the terminal on your phone.
+
+No cookie file, clipboard export, or developer tools are needed. gmcli uses a
+separate temporary browser profile, captures only the credentials needed for
+Google Messages, and removes the profile when finished or cancelled. It never
+reads your existing browser profile. The saved session is private (mode 0600).
+
+Chrome, Chromium, or Edge must be installed on the machine running `gmcli auth`,
+and a desktop display must be available. To select a browser or allow more time:
 
 ```sh
+gmcli auth --browser /path/to/chrome
+gmcli auth --browser-timeout 10m
+```
+
+If `session.json` already contains a Gaia pairing, `gmcli auth` checks the account
+and refreshes the session without a new emoji prompt. Pass `--new` to deliberately
+create a new phone pairing. A failed or cancelled attempt leaves the existing
+session file unchanged. Close the sign-in window or press Ctrl-C to cancel.
+Then run `gmcli sync --follow` to refresh the archive.
+
+QR pairing has been retired by Google. Existing QR sessions can still be queried
+offline; running `auth` migrates to Google Account pairing.
+
+#### Manual sign-in and remote servers
+
+The browser flow runs on the same machine as gmcli. For a server without a
+desktop, a browser Google refuses to sign into, or an automated input workflow,
+`--cookies-file` still accepts a copied cURL request or cookie JSON. You can pipe
+the clipboard directly without creating a file:
+
+1. Open a private Firefox window and visit
+   <https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config>.
+2. Sign into the account selected on the phone. Do not navigate elsewhere.
+3. Open developer tools, reload once, select the `/web/config` network request,
+   and choose **Copy as cURL** (bash format).
+4. Pipe the clipboard to gmcli on the machine where you keep the archive:
+
+```sh
+# macOS
 pbpaste | gmcli auth --cookies-file -
+# Linux/Wayland
+wl-paste --no-newline | gmcli auth --cookies-file -
+# Linux/X11
+xclip -selection clipboard -o | gmcli auth --cookies-file -
+# Example for an SSH server (replace archive-host with your host)
+pbpaste | ssh archive-host 'gmcli auth --cookies-file -'
 ```
 
-The input may also be a JSON object containing `SID`, `HSID`, `SSID`, `OSID`,
-`APISID`, and `SAPISID`; `__Secure-1PSIDTS` is accepted when Google supplies
-it. Never put cookie values directly in shell arguments, issue reports, logs,
-or chat messages.
+The copied cURL is parsed as text, never executed. An existing private file is
+also accepted: `gmcli auth --cookies-file /path/to/cookies.txt` (mode 0600).
+JSON input must contain `SID`, `HSID`, `SSID`, `OSID`, `APISID`, and `SAPISID`;
+`__Secure-1PSIDTS` is accepted when Google supplies it. Never put cookie values
+in shell arguments, issue reports, logs, or chat messages. Clear the clipboard
+and close the private window after pairing.
 
-If `session.json` already contains a Gaia pairing, `gmcli auth` validates that
-the cookies belong to the same account and refreshes the session without a new
-emoji prompt. Pass `--new` to deliberately create a new phone pairing. A
-failed or cancelled attempt leaves the existing session file unchanged.
-On a successful fresh pairing, select the displayed emoji on your phone.
-Then run `gmcli sync --follow` to refresh the archive. Existing QR sessions
-can still be queried offline; running `auth` migrates to Google Account pairing.
+Google's Device Bound Session Credentials can prevent cookies being used
+outside Chrome. The automatic flow disables that feature only for its temporary
+browser process. The manual flow uses Firefox to avoid that restriction.
+See the [upstream authentication documentation](https://docs.mau.fi/bridges/go/gmessages/authentication.html).
 
 ### Sync and query
 
 ```sh
-# 1. Pair first using the private-cookie instructions above.
+# 1. Sign in in the browser and confirm on your phone.
+gmcli auth
 
 # 2. Sync messages from the phone into the local database. --follow keeps
 #    the connection open and writes new messages as they arrive.
@@ -212,6 +242,7 @@ gmcli --json chats list | jq '.[0].name'
 cmd/                  Cobra command tree (auth, sync, version, doctor,
                       messages, contacts, chats, send, media)
 internal/
+  browserauth/        Temporary browser sign-in and credential capture
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
   store/              SQLite + FTS5 store (schema v4: separate connection health evidence)
@@ -224,11 +255,24 @@ skills/
 docs/research/        Phase 1 research notes
 ```
 
+## Development checks
+
+```sh
+go test ./...
+go vet ./...
+# Optional real-browser test; Chrome/Chromium must be installed.
+GMCLI_BROWSER_TEST=1 go test -race ./internal/browserauth
+```
+
+The browser test intercepts navigation and supplies synthetic cookies. It checks
+capture and temporary-profile cleanup without a Google account or phone. Live
+Google sign-in and phone confirmation still require a manual test.
+
 ## LLM integration
 
 The bundled OpenClaw skill lives in `skills/google-messages`. It is published
 on ClawHub as
-[Google Messages Local Archive](https://clawhub.ai/fdsouvenir/google-messages-local-archive)
+[Google Messages Local Archive](https://clawhub.ai/fdsouvenir/skills/google-messages-local-archive)
 (`google-messages-local-archive`) for searching, summarizing, and answering
 questions from a local Google Messages SMS/RCS archive with read-only commands
 by default.
