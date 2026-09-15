@@ -3,6 +3,7 @@ package gm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -417,18 +418,20 @@ func TestSendTextRejectsUnknownSendMode(t *testing.T) {
 }
 
 type fakeGaiaClient struct {
-	configEmail  string
-	fetchErr     error
-	startErr     error
-	finishErr    error
-	connectErr   error
-	emoji        string
-	phoneID      string
-	fetched      bool
-	started      bool
-	finished     bool
-	connected    bool
-	disconnected bool
+	configEmail           string
+	fetchErr              error
+	startErr              error
+	finishErr             error
+	connectErr            error
+	emoji                 string
+	phoneID               string
+	fetched               bool
+	started               bool
+	finished              bool
+	connected             bool
+	disconnected          bool
+	cancelAfterFinish     context.CancelFunc
+	cancelAfterValidation context.CancelFunc
 }
 
 func (f *fakeGaiaClient) FetchConfig(context.Context) error {
@@ -448,11 +451,17 @@ func (f *fakeGaiaClient) StartGaiaPairing(context.Context) (string, *libgm.Pairi
 
 func (f *fakeGaiaClient) FinishGaiaPairing(context.Context, *libgm.PairingSession) (string, error) {
 	f.finished = true
+	if f.cancelAfterFinish != nil {
+		f.cancelAfterFinish()
+	}
 	return f.phoneID, f.finishErr
 }
 
 func (f *fakeGaiaClient) ValidateConnection(context.Context) error {
 	f.connected = true
+	if f.cancelAfterValidation != nil {
+		f.cancelAfterValidation()
+	}
 	return f.connectErr
 }
 
@@ -503,29 +512,75 @@ func TestAuthenticateGaiaPairsAndPersistsOnlyAfterConfirmation(t *testing.T) {
 }
 
 func TestAuthenticateGaiaFailurePreservesExistingSession(t *testing.T) {
-	layout := testLayout(t)
-	if err := layout.EnsureDirs(); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name                          string
+		fetchErr, startErr, finishErr error
+	}{
+		{name: "invalid cookies", fetchErr: errors.New("invalid cookies")},
+		{name: "no phone", startErr: libgm.ErrNoDevicesFound},
+		{name: "wrong emoji", finishErr: libgm.ErrIncorrectEmoji},
+		{name: "phone cancellation", finishErr: libgm.ErrPairingCancelled},
+		{name: "deadline", finishErr: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := testLayout(t)
+			if err := layout.EnsureDirs(); err != nil {
+				t.Fatal(err)
+			}
+			before := []byte("existing-session\n")
+			if err := os.WriteFile(layout.Session, before, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", fetchErr: tc.fetchErr, startErr: tc.startErr, finishErr: tc.finishErr}
+			var gotAuth *libgm.AuthData
+			_, err := authenticateGaia(context.Background(), layout, zerolog.Nop(), testCookies(), true, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
+			if err == nil {
+				t.Fatal("expected authentication failure")
+			}
+			after, readErr := os.ReadFile(layout.Session)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(after) != string(before) {
+				t.Fatal("failed auth changed existing session")
+			}
+			if !fake.disconnected {
+				t.Fatal("failed auth did not disconnect")
+			}
+		})
 	}
-	before := []byte("existing-session\n")
-	if err := os.WriteFile(layout.Session, before, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", finishErr: libgm.ErrIncorrectEmoji}
-	var gotAuth *libgm.AuthData
-	_, err := authenticateGaia(
-		context.Background(), layout, zerolog.Nop(), testCookies(), true,
-		func(string) {}, fakeGaiaFactory(fake, &gotAuth),
-	)
-	if !errors.Is(err, libgm.ErrIncorrectEmoji) {
-		t.Fatalf("error = %v, want incorrect emoji", err)
-	}
-	after, readErr := os.ReadFile(layout.Session)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if string(after) != string(before) {
-		t.Fatalf("failed auth changed existing session")
+}
+
+func TestAuthenticateGaiaCancellationBeforeSavePreservesSession(t *testing.T) {
+	for _, forceNew := range []bool{false, true} {
+		t.Run(fmt.Sprint("new=", forceNew), func(t *testing.T) {
+			layout := testLayout(t)
+			if err := layout.EnsureDirs(); err != nil {
+				t.Fatal(err)
+			}
+			if err := saveAuth(layout.Session, testGaiaAuth("person@example.com")); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(layout.Session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", cancelAfterFinish: cancel, cancelAfterValidation: cancel}
+			var gotAuth *libgm.AuthData
+			_, err = authenticateGaia(ctx, layout, zerolog.Nop(), testCookies(), forceNew, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("want cancellation, got %v", err)
+			}
+			after, err := os.ReadFile(layout.Session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("cancelled auth changed existing session")
+			}
+		})
 	}
 }
 

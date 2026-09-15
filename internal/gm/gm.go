@@ -717,7 +717,10 @@ func (c *libgmGaiaClient) ValidateConnection(ctx context.Context) error {
 
 	roundTrip := make(chan error, 1)
 	go func() {
-		_, err := c.IsBugleDefault(ctx)
+		resp, err := c.IsBugleDefault(ctx)
+		if err == nil && resp == nil {
+			err = errors.New("phone returned no validation response")
+		}
 		roundTrip <- err
 	}()
 	select {
@@ -797,6 +800,9 @@ func authenticateGaia(
 	if err != nil {
 		return nil, describeGaiaPairingError("finish", err)
 	}
+	if err := pairCtx.Err(); err != nil {
+		return nil, err
+	}
 	if err := saveAuth(layout.Session, auth); err != nil {
 		return nil, fmt.Errorf("persist session: %w", err)
 	}
@@ -854,6 +860,9 @@ func reauthenticateGaia(
 	}
 	if err := cli.ValidateConnection(ctx); err != nil {
 		return nil, fmt.Errorf("validate existing Google Messages pairing: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err := saveAuth(layout.Session, auth); err != nil {
 		return nil, fmt.Errorf("persist refreshed session: %w", err)
