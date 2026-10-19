@@ -1,0 +1,98 @@
+# GoReleaser configuration: builds the release archives that
+# .github/workflows/release.yml attaches to a GitHub Release.
+#
+# Validate locally with `goreleaser check`; build everything without
+# publishing with `goreleaser release --snapshot --clean` (output in dist/).
+version: 2
+
+project_name: gmcli
+
+before:
+  hooks:
+    # Fail the release if go.sum no longer matches the module cache.
+    - go mod verify
+
+builds:
+  - id: gmcli
+    main: .
+    binary: gmcli
+    env:
+      # modernc.org/sqlite is pure Go, so every target cross-compiles
+      # from one Linux runner without a C toolchain.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    # {{ .Tag }} keeps the leading "v" so `gmcli --version` prints the same
+    # string as a `go install github.com/fdsouvenir/gmcli@vX.Y.Z` build,
+    # whose version comes from the module build info instead.
+    ldflags:
+      - -s -w -X github.com/fdsouvenir/gmcli/cmd.Version={{ .Tag }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: gmcli
+    ids:
+      - gmcli
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  # Only used when GoReleaser has to create the release itself (see below);
+  # it produces the draft's starting notes from the commits since the last tag.
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: fdsouvenir
+    name: gmcli
+  # The maintainer writes release notes by hand and usually creates the
+  # release (and its tag) in one step. When the release already exists,
+  # GoReleaser only uploads the archives: the notes are kept (mode
+  # keep-existing) and the release stays published. The title would otherwise
+  # be reset to the tag, so the workflow passes the existing title through
+  # RELEASE_NAME.
+  #
+  # When only the tag was pushed, GoReleaser creates a draft so nothing is
+  # published until the maintainer has written the notes.
+  name_template: "{{ .Env.RELEASE_NAME }}"
+  mode: keep-existing
+  draft: true
+  prerelease: auto
+  # A re-run of the workflow for the same tag replaces the archives it
+  # already uploaded instead of failing with 422.
+  replace_existing_artifacts: true
+
+report_sizes: true

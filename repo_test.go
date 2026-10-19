@@ -72,6 +72,7 @@ func TestGitignoreCoversSecrets(t *testing.T) {
 		"session.json", "gmcli.db", "cookies.txt", "cookies.json", "auth.cookies",
 		".env", ".env.local", "server.key", "cert.pem", "coverage.out",
 		".claude/settings.local.json", ".claude/worktrees/feature/main.go",
+		"dist/checksums.txt", "dist/gmcli_linux_amd64_v1/gmcli",
 	} {
 		if !ignored(path) {
 			t.Errorf("%s is not ignored by .gitignore", path)
@@ -82,5 +83,74 @@ func TestGitignoreCoversSecrets(t *testing.T) {
 		if ignored(path) {
 			t.Errorf("%s is ignored by .gitignore but should be committable", path)
 		}
+	}
+}
+
+// Release binaries must report the tag they were built from, which only works
+// while the -X flag names the real module path of cmd.Version and the build
+// stays cgo-free so one runner can cross-compile every target.
+func TestGoReleaserInjectsVersionFromModulePath(t *testing.T) {
+	gomod, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := regexp.MustCompile(`(?m)^module\s+(\S+)`).FindStringSubmatch(string(gomod))
+	if module == nil {
+		t.Fatal("go.mod: module line not found")
+	}
+	raw, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(raw)
+	// {{ .Tag }} keeps the leading "v" so `gmcli --version` matches a
+	// `go install ...@vX.Y.Z` build; {{ .Version }} would print 1.2.0.
+	want := "-X " + module[1] + "/cmd.Version={{ .Tag }}"
+	if !strings.Contains(config, want) {
+		t.Errorf(".goreleaser.yaml does not inject the version with %q", want)
+	}
+	if !regexp.MustCompile(`(?m)^\s*-\s*CGO_ENABLED=0\s*$`).MatchString(config) {
+		t.Error(".goreleaser.yaml does not set CGO_ENABLED=0 for the build")
+	}
+	for _, target := range []string{"linux", "darwin", "windows", "amd64", "arm64"} {
+		if !regexp.MustCompile(`(?m)^\s*-\s*` + target + `\s*$`).MatchString(config) {
+			t.Errorf(".goreleaser.yaml does not build for %s", target)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^\s*name_template:\s*checksums\.txt\s*$`).MatchString(config) {
+		t.Error(".goreleaser.yaml does not write checksums.txt")
+	}
+}
+
+// The release workflow must only attach archives for version tags, and only
+// after the test suite has passed on that tag.
+func TestReleaseWorkflowGatesArchivesOnTests(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(raw)
+	if !regexp.MustCompile(`(?m)^\s*tags:\s*\n\s*-\s*"v\*"\s*$`).MatchString(workflow) {
+		t.Error("release.yml does not trigger on v* tag pushes")
+	}
+	jobs := strings.Split(workflow, "\n  release:\n")
+	if len(jobs) != 2 {
+		t.Fatalf("release.yml: expected one release job, found %d", len(jobs)-1)
+	}
+	testJob, releaseJob := jobs[0], jobs[1]
+	if !strings.Contains(testJob, "\n  test:\n") || !strings.Contains(testJob, "go test") {
+		t.Error("release.yml: test job does not run go test before the release job")
+	}
+	if !regexp.MustCompile(`(?m)^\s*needs:\s*test\s*$`).MatchString(releaseJob) {
+		t.Error("release.yml: release job does not depend on the test job")
+	}
+	if !strings.Contains(releaseJob, "uses: goreleaser/goreleaser-action@") {
+		t.Error("release.yml: release job does not run goreleaser-action")
+	}
+	if !regexp.MustCompile(`(?m)^\s*contents:\s*write\s*$`).MatchString(releaseJob) {
+		t.Error("release.yml: release job cannot upload assets without contents: write")
+	}
+	if regexp.MustCompile(`(?m)^\s*contents:\s*write\s*$`).MatchString(testJob) {
+		t.Error("release.yml: the test job must not hold contents: write")
 	}
 }

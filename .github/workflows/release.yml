@@ -1,0 +1,121 @@
+name: Release
+
+# Builds the cross-platform archives for a version tag and attaches them to
+# the tag's GitHub Release. GoReleaser keeps release notes and titles the
+# maintainer has already written (see .goreleaser.yaml); when only a tag was
+# pushed it creates a draft release for the maintainer to finish.
+#
+# To retry a failed run for an existing tag:
+#   gh workflow run release.yml --ref vX.Y.Z
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a release half way through uploading its assets.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Go test (release gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+  release:
+    name: Build and attach release archives
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Create or update the GitHub Release and upload its assets.
+      contents: write
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser needs every tag to compute the changelog range.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Releases are cut from main. A tag on any other branch, or a
+      # workflow_dispatch from a branch instead of a tag, stops here before
+      # anything is built or uploaded.
+      - name: Verify the ref is a version tag on main
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::release runs need a tag ref, got ${REF_TYPE} ${REF_NAME}"
+            exit 1
+          fi
+          case "$REF_NAME" in
+            v[0-9]*) ;;
+            *) echo "::error::tag ${REF_NAME} is not a version tag (vX.Y.Z)"; exit 1 ;;
+          esac
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag ${REF_NAME} (${GITHUB_SHA}) is not reachable from main"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # GoReleaser would otherwise rename an existing release to the bare tag.
+      - name: Keep the existing release title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          name=$(gh release view "$REF_NAME" --json name --jq .name 2>/dev/null || true)
+          if [ -z "$name" ]; then
+            name="$REF_NAME"
+          fi
+          echo "RELEASE_NAME=$name" >> "$GITHUB_ENV"
+          echo "release title: $name"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report release assets
+        run: |
+          {
+            echo "### Release assets"
+            echo '```'
+            cat dist/checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -45,6 +45,32 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 ## Install
 
+### Pre-built binaries
+
+Each release after v1.2.0 attaches archives for Linux (`amd64`, `arm64`),
+macOS (`amd64`, `arm64`), and Windows (`amd64`) under **Assets**, plus a
+`checksums.txt` with their SHA-256 sums. No Go toolchain is needed. Replace
+`VERSION` with the release tag and pick your platform:
+
+```sh
+VERSION=v1.3.0    # a release tag whose Assets list archives
+OS=linux          # linux, darwin, or windows
+ARCH=amd64        # amd64 or arm64
+BASE="https://github.com/fdsouvenir/gmcli/releases/download/${VERSION}"
+curl -fsSLO "${BASE}/gmcli_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "${BASE}/checksums.txt"
+sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf "gmcli_${VERSION#v}_${OS}_${ARCH}.tar.gz" gmcli
+install -m 0755 gmcli "$HOME/.local/bin/gmcli"
+gmcli --version
+```
+
+The Windows archive is a `.zip` containing `gmcli.exe`. The binaries are not
+code-signed; if macOS quarantines a copy downloaded with a browser, clear it
+with `xattr -d com.apple.quarantine gmcli`.
+
+### With Go
+
 Requires Go 1.26 or newer.
 
 Install a published version using its module path (replace `VERSION` with an
@@ -56,7 +82,11 @@ GOBIN="$HOME/.local/bin" go install github.com/fdsouvenir/gmcli@VERSION
 
 Keep `$HOME/.local/bin` on your PATH. See the
 [latest release](https://github.com/fdsouvenir/gmcli/releases/latest) for a
-versioned install command and upgrade notes. For local development:
+versioned install command and upgrade notes.
+
+### From source
+
+For local development:
 
 ```sh
 git clone https://github.com/fdsouvenir/gmcli
@@ -71,8 +101,9 @@ commit, inject it at link time:
 go build -ldflags "-X github.com/fdsouvenir/gmcli/cmd.Version=$(git describe --tags --always --dirty)" -o gmcli .
 ```
 
-Pre-built binary distribution and Homebrew packaging are planned after the
-initial beta releases.
+Release archives are built by GoReleaser from `.goreleaser.yaml` with the same
+`-X` flag, so `gmcli --version` prints the release tag. Homebrew packaging is
+not available yet.
 
 ## Current limits
 
