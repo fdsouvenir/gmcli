@@ -75,19 +75,21 @@ changelog:
       - "^chore:"
 
 release:
-  github:
-    owner: fdsouvenir
-    name: gmcli
+  # No github.owner/name here: GoReleaser reads the repository from the
+  # checkout's origin remote, which Actions points at the repository running
+  # the workflow. A tag pushed to a fork therefore releases to the fork instead
+  # of failing against fdsouvenir/gmcli with a token that cannot write there.
+  #
   # The maintainer writes release notes by hand and usually creates the
   # release (and its tag) in one step. When the release already exists,
   # GoReleaser only uploads the archives: the notes are kept (mode
   # keep-existing) and the release stays published. The title would otherwise
   # be reset to the tag, so the workflow passes the existing title through
-  # RELEASE_NAME.
+  # RELEASE_NAME; outside the workflow the title falls back to the tag.
   #
   # When only the tag was pushed, GoReleaser creates a draft so nothing is
   # published until the maintainer has written the notes.
-  name_template: "{{ .Env.RELEASE_NAME }}"
+  name_template: '{{ envOrDefault "RELEASE_NAME" .Tag }}'
   mode: keep-existing
   draft: true
   prerelease: auto

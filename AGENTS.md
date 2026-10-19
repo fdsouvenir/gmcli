@@ -46,8 +46,11 @@ pushes the tag and starts `.github/workflows/release.yml`. The workflow runs
 `go vet` and `go test -race ./...`, checks that the tag is reachable from
 `main`, then runs GoReleaser (`.goreleaser.yaml`) to build Linux, macOS, and
 Windows archives with `CGO_ENABLED=0` and attach them, plus `checksums.txt`,
-to the release. An existing release keeps its title and hand-written notes;
-if only the tag was pushed, GoReleaser creates a draft to finish by hand.
+to the release. An existing published release keeps its title, hand-written
+notes, and pre-release flag; if only the tag was pushed, GoReleaser creates a
+draft to finish by hand. Do not save a draft in the UI and then push its tag
+separately: GoReleaser cannot find drafts by tag, so the workflow stops and
+asks for the draft to be published or deleted first.
 `goreleaser check` validates the config and
 `goreleaser release --snapshot --clean` builds every target into `dist/`
 without publishing. Retry a failed run with

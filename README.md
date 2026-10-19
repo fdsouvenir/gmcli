@@ -54,13 +54,14 @@ macOS (`amd64`, `arm64`), and Windows (`amd64`) under **Assets**, plus a
 
 ```sh
 VERSION=v1.3.0    # a release tag whose Assets list archives
-OS=linux          # linux, darwin, or windows
+OS=linux          # linux or darwin (the Windows .zip is described below)
 ARCH=amd64        # amd64 or arm64
 BASE="https://github.com/fdsouvenir/gmcli/releases/download/${VERSION}"
 curl -fsSLO "${BASE}/gmcli_${VERSION#v}_${OS}_${ARCH}.tar.gz"
 curl -fsSLO "${BASE}/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt   # macOS: shasum -a 256 --ignore-missing -c checksums.txt
 tar -xzf "gmcli_${VERSION#v}_${OS}_${ARCH}.tar.gz" gmcli
+mkdir -p "$HOME/.local/bin"
 install -m 0755 gmcli "$HOME/.local/bin/gmcli"
 gmcli --version
 ```

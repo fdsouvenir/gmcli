@@ -89,18 +89,44 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # GoReleaser would otherwise rename an existing release to the bare tag.
-      - name: Keep the existing release title
+      # GoReleaser looks the release up by tag and, when it finds one, resends
+      # the title (from name_template) and the pre-release flag (from the tag
+      # name). Record what the maintainer set so both survive the run.
+      - name: Record the existing release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          name=$(gh release view "$REF_NAME" --json name --jq .name 2>/dev/null || true)
-          if [ -z "$name" ]; then
-            name="$REF_NAME"
+          # Only a missing release falls back to the bare tag. Any other gh
+          # failure (auth, rate limit, network) stops the run rather than
+          # silently renaming a release the maintainer already titled.
+          errfile="$RUNNER_TEMP/gh-release-view.err"
+          name="$REF_NAME"
+          existed=false
+          prerelease=false
+          if view=$(gh release view "$REF_NAME" --json name,isDraft,isPrerelease 2>"$errfile"); then
+            if [ "$(jq -r .isDraft <<<"$view")" = "true" ]; then
+              echo "::error::a draft release for ${REF_NAME} already exists. GoReleaser cannot attach assets to a draft it finds by tag and would create a second draft. Publish or delete the draft, then re-run: gh workflow run release.yml --ref ${REF_NAME}"
+              exit 1
+            fi
+            existed=true
+            name=$(jq -r .name <<<"$view")
+            prerelease=$(jq -r .isPrerelease <<<"$view")
+            [ -n "$name" ] || name="$REF_NAME"
+          elif ! grep -q 'release not found' "$errfile"; then
+            cat "$errfile" >&2
+            echo "::error::could not look up the release for ${REF_NAME}"
+            exit 1
           fi
-          echo "RELEASE_NAME=$name" >> "$GITHUB_ENV"
-          echo "release title: $name"
+          # Delimiter form: a title can never add lines to the job environment.
+          {
+            printf 'RELEASE_NAME<<%s\n' "GMCLI_RELEASE_NAME_EOF"
+            printf '%s\n' "$name"
+            printf '%s\n' "GMCLI_RELEASE_NAME_EOF"
+            printf 'RELEASE_EXISTED=%s\n' "$existed"
+            printf 'RELEASE_PRERELEASE=%s\n' "$prerelease"
+          } >> "$GITHUB_ENV"
+          echo "release exists: $existed, title: $name, pre-release: $prerelease"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -110,6 +136,23 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Build and publish the tag that triggered the run, not whichever
+          # tag `git describe` picks when several point at the same commit.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # `prerelease: auto` is derived from the tag name, so a release the
+      # maintainer marked as a pre-release by hand would be flipped back.
+      - name: Restore the pre-release flag
+        if: env.RELEASE_EXISTED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          now=$(gh release view "$REF_NAME" --json isPrerelease --jq .isPrerelease)
+          if [ "$now" != "$RELEASE_PRERELEASE" ]; then
+            gh release edit "$REF_NAME" --prerelease="$RELEASE_PRERELEASE"
+            echo "restored pre-release=$RELEASE_PRERELEASE on ${REF_NAME}"
+          fi
 
       - name: Report release assets
         run: |

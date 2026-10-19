@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -90,13 +91,11 @@ func TestGitignoreCoversSecrets(t *testing.T) {
 // while the -X flag names the real module path of cmd.Version and the build
 // stays cgo-free so one runner can cross-compile every target.
 func TestGoReleaserInjectsVersionFromModulePath(t *testing.T) {
-	gomod, err := os.ReadFile("go.mod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	module := regexp.MustCompile(`(?m)^module\s+(\S+)`).FindStringSubmatch(string(gomod))
-	if module == nil {
-		t.Fatal("go.mod: module line not found")
+	// The test binary already carries the main module path, the same build
+	// info cmd/version.go reads, so go.mod does not need to be parsed.
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi.Main.Path == "" {
+		t.Fatal("build info does not carry the main module path")
 	}
 	raw, err := os.ReadFile(".goreleaser.yaml")
 	if err != nil {
@@ -105,7 +104,7 @@ func TestGoReleaserInjectsVersionFromModulePath(t *testing.T) {
 	config := string(raw)
 	// {{ .Tag }} keeps the leading "v" so `gmcli --version` matches a
 	// `go install ...@vX.Y.Z` build; {{ .Version }} would print 1.2.0.
-	want := "-X " + module[1] + "/cmd.Version={{ .Tag }}"
+	want := "-X " + bi.Main.Path + "/cmd.Version={{ .Tag }}"
 	if !strings.Contains(config, want) {
 		t.Errorf(".goreleaser.yaml does not inject the version with %q", want)
 	}
