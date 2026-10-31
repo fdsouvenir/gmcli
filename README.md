@@ -196,3 +196,11 @@ by default.
 GNU Affero General Public License, version 3 or later. See `LICENSE` for the
 full text and `NOTICE` for the third-party notices required by upstream
 licenses.
+
+### Connection health and Google-account pairing
+
+`doctor` now distinguishes process heartbeats from actual phone/protocol evidence;
+legacy activity and saved pairing alone cannot produce a green result. JSON doctor
+exits nonzero when issues are present. Google-account pairing is available through
+`auth gaia --human-terminal` in a private human-controlled terminal only. See
+[health semantics, limitations, and safe Gaia handoff](docs/health-and-gaia.md).
