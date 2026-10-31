@@ -1,7 +1,7 @@
 package store
 
 // schemaVersion is the migration target. Bump when migrations[] grows.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // migrations are applied in order. Each runs in its own transaction; the
 // store records the highest applied version in the schema_version table.
@@ -142,4 +142,18 @@ var migrations = []string{
 
 	INSERT INTO schema_version (version) VALUES (3);
 	`,
+	// v4: evidence starts unknown; never promote legacy synthetic timestamps.
+	`CREATE TABLE connection_health (
+ id INTEGER PRIMARY KEY CHECK(id=1), process_heartbeat INTEGER NOT NULL DEFAULT 0,
+ transport TEXT NOT NULL DEFAULT 'unknown', transport_observed INTEGER NOT NULL DEFAULT 0,
+ protocol_evidence INTEGER NOT NULL DEFAULT 0, data_evidence INTEGER NOT NULL DEFAULT 0,
+ phone_response INTEGER NOT NULL DEFAULT 0, phone TEXT NOT NULL DEFAULT 'unknown',
+ invalidation TEXT NOT NULL DEFAULT '',
+ snapshot_verified INTEGER NOT NULL DEFAULT 0,
+ archive_state TEXT NOT NULL DEFAULT 'unknown',
+ contacts_snapshot_empty INTEGER NOT NULL DEFAULT 0,
+ conversations_snapshot_empty INTEGER NOT NULL DEFAULT 0
+ ) STRICT;
+ INSERT INTO connection_health(id) VALUES(1);
+ INSERT INTO schema_version(version) VALUES(4);`,
 }
