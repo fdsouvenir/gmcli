@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # GitHub Actions — weekly checks to keep workflow actions up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Go Modules — security updates only. A limit of 0 disables routine
+  # version-bump PRs; CVE patches still arrive through Dependabot security
+  # updates, which have their own limit and must be enabled separately under
+  # the repository's Security settings (they are off by default) or this
+  # entry produces nothing at all.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
