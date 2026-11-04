@@ -1,0 +1,6 @@
+title = "gitleaks config"
+
+# gitleaks adds its default rules to a config file only when told to.
+# Without this, passing --config overrides built-in rules with an empty rule set.
+[extend]
+useDefault = true

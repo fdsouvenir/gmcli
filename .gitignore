@@ -3,14 +3,30 @@
 /dist/
 *.exe
 
-# Local dev databases / sessions
+# Local dev databases, credentials, and sessions
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
 session.json
+cookies.txt
+cookies.json
+*.cookies
+*.pem
+*.key
+.env*
+# The committed template documents the variables without holding values; .envrc is for direnv.
+!.env.example
+!.envrc
 
-# Editor/OS noise
+# Test and coverage artifacts
+coverage.out
+*.coverprofile
+
+# Editor/OS and local agent noise. Shared .claude/ project files (settings.json,
+# skills) stay committable; only per-user overrides and worktrees are ignored.
 .idea/
 .vscode/
 .DS_Store
+.claude/settings.local.json
+.claude/worktrees/

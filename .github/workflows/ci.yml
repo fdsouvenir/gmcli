@@ -104,3 +104,62 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_CHECKSUM_X64: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          GITLEAKS_CHECKSUM_ARM64: "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+        run: |
+          case "$(uname -m)" in
+            x86_64)
+              arch="x64"
+              checksum="${GITLEAKS_CHECKSUM_X64}"
+              ;;
+            aarch64|arm64)
+              arch="arm64"
+              checksum="${GITLEAKS_CHECKSUM_ARM64}"
+              ;;
+            *)
+              echo "::error::unsupported runner architecture: $(uname -m)"
+              exit 1
+              ;;
+          esac
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          # curl retries transient and HTTP failures itself, truncating the
+          # output file on each attempt so a partial download never reaches
+          # the checksum step.
+          curl -fsSL --connect-timeout 30 --max-time 150 \
+            --retry 2 --retry-delay 15 --retry-all-errors \
+            --proto '=https' --proto-redir '=https' "${url}" -o /tmp/gitleaks.tar.gz
+          echo "${checksum}  /tmp/gitleaks.tar.gz" | sha256sum -c
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin
+
+      - name: Check gitleaks config still detects secrets
+        run: |
+          mkdir -p /tmp/canary
+          printf -- '-----BEGIN %s-----\n%s\n-----END %s-----\n' "PRIVATE KEY" "$(openssl rand -base64 300 | tr -d '\n')" "PRIVATE KEY" > /tmp/canary/key.pem
+          status=0
+          gitleaks dir /tmp/canary --config .gitleaks.toml --no-banner --redact --exit-code 42 || status=$?
+          if [ "$status" -ne 42 ]; then
+            echo "::error::.gitleaks.toml did not flag a private key (exit $status); check [extend] useDefault"
+            exit 1
+          fi
+
+      - name: Run gitleaks
+        run: gitleaks git . --config .gitleaks.toml --redact --verbose --exit-code 1
