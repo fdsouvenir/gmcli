@@ -25,7 +25,7 @@ ClawHub/frontmatter slug is `google-messages-local-archive`.
 ## Installing
 
 Requires OpenClaw **2026.8.1 (OpenClaw 2.0) or newer** for OpenClaw use,
-and Go 1.25 or newer to install gmcli. The bundled runtime preflight checks
+and Go 1.26 or newer to install gmcli. The bundled runtime preflight checks
 OpenClaw and gmcli versions before archive queries.
 
 The exact install path depends on your harness:

@@ -45,7 +45,7 @@ roughly every 14 days of inactivity (Google's policy, not ours).
 
 ## Install
 
-Requires Go 1.25 or newer.
+Requires Go 1.26 or newer.
 
 Install a published version using its module path (replace `VERSION` with an
 existing release tag):

@@ -60,7 +60,7 @@ binary, or a sync daemon. A fresh ClawHub install should use the declared Go
 installer metadata to install `gmcli` from the gmcli release tag. The user still
 needs to pair `gmcli` with their own Google Messages account and keep the local
 archive fresh, for example by running `gmcli sync --follow` or a supervised
-service themselves. Go 1.25 or newer is required to install gmcli.
+service themselves. Go 1.26 or newer is required to install gmcli.
 
 Before upgrading, back up the database and session privately. Store-opening
 commands, including `doctor`, apply pending SQLite migrations. Read-only means

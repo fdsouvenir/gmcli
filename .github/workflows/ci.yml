@@ -9,30 +9,98 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Superseded runs on branches and PRs are cancelled; every push to main
+  # keeps its own verdict so no main commit is left without a result.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
-    name: Go test
+    name: Go test (${{ matrix.go }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # go.mod: the minimum version README.md promises builds from source.
+          - go: go.mod
+            go-version-file: go.mod
+          # stable: the current release, where govulncheck's stdlib findings are meaningful.
+          - go: stable
+            go-version: stable
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
+          persist-credentials: false
+
+      # setup-go treats an empty input as unset, so each matrix entry supplies
+      # exactly one of the two version inputs.
+      - name: Set up Go (${{ matrix.go }})
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
           cache: true
 
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted with gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # shellcheck does not depend on the Go toolchain, so one matrix leg is enough.
+      - name: Lint shell scripts
+        if: matrix.go == 'stable'
+        run: git ls-files -z -- '*.sh' | xargs -0 --no-run-if-empty shellcheck
+
       - name: Test
-        run: go test ./...
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Report coverage summary
+        if: matrix.go == 'stable'
+        run: |
+          {
+            echo "### Test Coverage Summary"
+            echo '```'
+            go tool cover -func=coverage.out | tail -n 25
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Browser sign-in fixture
         env:
           GMCLI_BROWSER_TEST: "1"
         run: go test -race ./internal/browserauth
 
-      - name: Vet
-        run: go vet ./...
+      # govulncheck reports standard-library findings against the running
+      # toolchain, so it only runs on stable; the go.mod minimum would fail on
+      # stdlib advisories already fixed in newer patch releases.
+      - name: Install govulncheck
+        if: matrix.go == 'stable'
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Vulnerability audit
+        if: matrix.go == 'stable'
+        run: |
+          set -o pipefail
+          status=0
+          govulncheck ./... | tee /tmp/govulncheck.txt || status=$?
+          {
+            echo "### Vulnerability Audit (govulncheck)"
+            echo '```'
+            cat /tmp/govulncheck.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
