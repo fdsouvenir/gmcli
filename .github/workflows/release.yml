@@ -36,7 +36,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
 
       - name: Vet
@@ -44,6 +44,22 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Vulnerability audit
+        run: |
+          set -o pipefail
+          status=0
+          govulncheck ./... | tee /tmp/govulncheck.txt || status=$?
+          {
+            echo "### Vulnerability Audit (govulncheck)"
+            echo '```'
+            cat /tmp/govulncheck.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
   release:
     name: Build and attach release archives
@@ -86,7 +102,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
 
       # GoReleaser looks the release up by tag and, when it finds one, resends
@@ -143,7 +159,7 @@ jobs:
       # `prerelease: auto` is derived from the tag name, so a release the
       # maintainer marked as a pre-release by hand would be flipped back.
       - name: Restore the pre-release flag
-        if: env.RELEASE_EXISTED == 'true'
+        if: ${{ !cancelled() && env.RELEASE_EXISTED == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}

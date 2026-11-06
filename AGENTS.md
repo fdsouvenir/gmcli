@@ -43,7 +43,7 @@ Pull requests should describe the behavior change, list test commands run, and c
 Releases are cut from `main`. Creating the release with its tag in one step,
 for example `gh release create vX.Y.Z --target main --title "..." --notes-file ...`,
 pushes the tag and starts `.github/workflows/release.yml`. The workflow runs
-`go vet` and `go test -race ./...`, checks that the tag is reachable from
+`go vet`, `go test -race ./...`, and `govulncheck`, checks that the tag is reachable from
 `main`, then runs GoReleaser (`.goreleaser.yaml`) to build Linux, macOS, and
 Windows archives with `CGO_ENABLED=0` and attach them, plus `checksums.txt`,
 to the release. An existing published release keeps its title, hand-written

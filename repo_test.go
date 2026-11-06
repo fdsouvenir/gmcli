@@ -140,6 +140,9 @@ func TestReleaseWorkflowGatesArchivesOnTests(t *testing.T) {
 	if !strings.Contains(testJob, "\n  test:\n") || !strings.Contains(testJob, "go test") {
 		t.Error("release.yml: test job does not run go test before the release job")
 	}
+	if !strings.Contains(testJob, "govulncheck") {
+		t.Error("release.yml: test job does not run govulncheck")
+	}
 	if !regexp.MustCompile(`(?m)^\s*needs:\s*test\s*$`).MatchString(releaseJob) {
 		t.Error("release.yml: release job does not depend on the test job")
 	}
