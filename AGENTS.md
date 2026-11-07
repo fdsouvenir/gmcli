@@ -38,6 +38,24 @@ Recent history uses short imperative subjects, sometimes with Conventional Commi
 
 Pull requests should describe the behavior change, list test commands run, and call out live-device implications for auth, sync, send, history, or media changes. Include terminal output when changing human-readable command output.
 
+## Releasing
+
+Releases are cut from `main`. Creating the release with its tag in one step,
+for example `gh release create vX.Y.Z --target main --title "..." --notes-file ...`,
+pushes the tag and starts `.github/workflows/release.yml`. The workflow runs
+`go vet`, `go test -race ./...`, and `govulncheck`, checks that the tag is reachable from
+`main`, then runs GoReleaser (`.goreleaser.yaml`) to build Linux, macOS, and
+Windows archives with `CGO_ENABLED=0` and attach them, plus `checksums.txt`,
+to the release. An existing published release keeps its title, hand-written
+notes, and pre-release flag; if only the tag was pushed, GoReleaser creates a
+draft to finish by hand. Do not save a draft in the UI and then push its tag
+separately: GoReleaser cannot find drafts by tag, so the workflow stops and
+asks for the draft to be published or deleted first.
+`goreleaser check` validates the config and
+`goreleaser release --snapshot --clean` builds every target into `dist/`
+without publishing. Retry a failed run with
+`gh workflow run release.yml --ref vX.Y.Z`.
+
 ## Security & Configuration Tips
 
 This project handles local message archives and session tokens. Do not commit generated databases, `session.json`, downloaded media, or logs. Preserve read-only defaults for commands that mutate phone state, and require explicit opt-in for sends or reactions.

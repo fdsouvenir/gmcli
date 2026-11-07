@@ -1,0 +1,180 @@
+name: Release
+
+# Builds the cross-platform archives for a version tag and attaches them to
+# the tag's GitHub Release. GoReleaser keeps release notes and titles the
+# maintainer has already written (see .goreleaser.yaml); when only a tag was
+# pushed it creates a draft release for the maintainer to finish.
+#
+# To retry a failed run for an existing tag:
+#   gh workflow run release.yml --ref vX.Y.Z
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a release half way through uploading its assets.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Go test (release gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+      - name: Vulnerability audit
+        run: |
+          set -o pipefail
+          status=0
+          govulncheck ./... | tee /tmp/govulncheck.txt || status=$?
+          {
+            echo "### Vulnerability Audit (govulncheck)"
+            echo '```'
+            cat /tmp/govulncheck.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  release:
+    name: Build and attach release archives
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Create or update the GitHub Release and upload its assets.
+      contents: write
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser needs every tag to compute the changelog range.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Releases are cut from main. A tag on any other branch, or a
+      # workflow_dispatch from a branch instead of a tag, stops here before
+      # anything is built or uploaded.
+      - name: Verify the ref is a version tag on main
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::release runs need a tag ref, got ${REF_TYPE} ${REF_NAME}"
+            exit 1
+          fi
+          if ! printf '%s\n' "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag ${REF_NAME} is not a valid semver version tag (expected vX.Y.Z or vX.Y.Z-suffix)"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag ${REF_NAME} (${GITHUB_SHA}) is not reachable from main"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+
+      # GoReleaser looks the release up by tag and, when it finds one, resends
+      # the title (from name_template) and the pre-release flag (from the tag
+      # name). Record what the maintainer set so both survive the run.
+      - name: Record the existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Only a missing release falls back to the bare tag. Any other gh
+          # failure (auth, rate limit, network) stops the run rather than
+          # silently renaming a release the maintainer already titled.
+          errfile="$RUNNER_TEMP/gh-release-view.err"
+          name="$REF_NAME"
+          existed=false
+          prerelease=false
+          if view=$(gh release view "$REF_NAME" --json name,isDraft,isPrerelease 2>"$errfile"); then
+            if [ "$(jq -r .isDraft <<<"$view")" = "true" ]; then
+              echo "::error::a draft release for ${REF_NAME} already exists. GoReleaser cannot attach assets to a draft it finds by tag and would create a second draft. Publish or delete the draft, then re-run: gh workflow run release.yml --ref ${REF_NAME}"
+              exit 1
+            fi
+            existed=true
+            name=$(jq -r .name <<<"$view")
+            prerelease=$(jq -r .isPrerelease <<<"$view")
+            [ -n "$name" ] || name="$REF_NAME"
+          elif ! grep -q 'release not found' "$errfile"; then
+            cat "$errfile" >&2
+            echo "::error::could not look up the release for ${REF_NAME}"
+            exit 1
+          fi
+          # Delimiter form: a title can never add lines to the job environment.
+          {
+            printf 'RELEASE_NAME<<%s\n' "GMCLI_RELEASE_NAME_EOF"
+            printf '%s\n' "$name"
+            printf '%s\n' "GMCLI_RELEASE_NAME_EOF"
+            printf 'RELEASE_EXISTED=%s\n' "$existed"
+            printf 'RELEASE_PRERELEASE=%s\n' "$prerelease"
+          } >> "$GITHUB_ENV"
+          echo "release exists: $existed, title: $name, pre-release: $prerelease"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Build and publish the tag that triggered the run, not whichever
+          # tag `git describe` picks when several point at the same commit.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # `prerelease: auto` is derived from the tag name, so a release the
+      # maintainer marked as a pre-release by hand would be flipped back.
+      - name: Restore the pre-release flag
+        if: ${{ !cancelled() && env.RELEASE_EXISTED == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          now=$(gh release view "$REF_NAME" --json isPrerelease --jq .isPrerelease)
+          if [ "$now" != "$RELEASE_PRERELEASE" ]; then
+            gh release edit "$REF_NAME" --prerelease="$RELEASE_PRERELEASE"
+            echo "restored pre-release=$RELEASE_PRERELEASE on ${REF_NAME}"
+          fi
+
+      - name: Report release assets
+        run: |
+          {
+            echo "### Release assets"
+            echo '```'
+            cat dist/checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
