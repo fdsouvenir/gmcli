@@ -72,6 +72,7 @@ func TestGitignoreCoversSecrets(t *testing.T) {
 	for _, path := range []string{
 		"session.json", "gmcli.db", "cookies.txt", "cookies.json", "auth.cookies",
 		".env", ".env.local", "server.key", "cert.pem", "coverage.out",
+		"CLAUDE.local.md", ".claude/CLAUDE.local.md",
 		".claude/settings.local.json", ".claude/worktrees/feature/main.go",
 		"dist/checksums.txt", "dist/gmcli_linux_amd64_v1/gmcli",
 	} {
@@ -79,8 +80,12 @@ func TestGitignoreCoversSecrets(t *testing.T) {
 			t.Errorf("%s is not ignored by .gitignore", path)
 		}
 	}
-	// Shared agent configuration, direnv config, and the env template must remain committable.
-	for _, path := range []string{".env.example", ".envrc", ".claude/settings.json", ".claude/skills/README.md"} {
+	// Shared agent configuration, PR template, direnv config, and the env template must remain committable.
+	for _, path := range []string{
+		".env.example", ".envrc", "AGENTS.md", "CLAUDE.md",
+		".claude/settings.json", ".claude/skills/README.md",
+		".github/PULL_REQUEST_TEMPLATE.md",
+	} {
 		if ignored(path) {
 			t.Errorf("%s is ignored by .gitignore but should be committable", path)
 		}
@@ -155,4 +160,110 @@ func TestReleaseWorkflowGatesArchivesOnTests(t *testing.T) {
 	if regexp.MustCompile(`(?m)^\s*contents:\s*write\s*$`).MatchString(testJob) {
 		t.Error("release.yml: the test job must not hold contents: write")
 	}
+}
+
+// CLAUDE.md must load AGENTS.md via an active @AGENTS.md import (outside code
+// fences and inline code spans) so AGENTS.md stays the single source of truth.
+func TestClaudeGuideImportsAgentsGuide(t *testing.T) {
+	raw, err := os.ReadFile("CLAUDE.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := stripMarkdownFencesAndComments(string(raw))
+	if !regexp.MustCompile(`(?m)^@AGENTS\.md\s*$`).MatchString(active) {
+		t.Fatal("CLAUDE.md does not contain a standalone @AGENTS.md import outside code blocks")
+	}
+	imports := regexp.MustCompile(`(?m)^\s*@(\S+)\s*$`).FindAllStringSubmatch(active, -1)
+	for _, m := range imports {
+		target := filepath.FromSlash(m[1])
+		if strings.Contains(m[1], "`") || filepath.IsAbs(target) || strings.HasPrefix(filepath.Clean(target), "..") {
+			t.Fatalf("CLAUDE.md: invalid import target %q", m[1])
+		}
+		info, err := os.Stat(target)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("CLAUDE.md imports %q, which is not a regular file: %v", m[1], err)
+		}
+		imported, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("CLAUDE.md imports %q, which cannot be read: %v", m[1], err)
+		}
+		if strings.TrimSpace(string(imported)) == "" {
+			t.Errorf("CLAUDE.md imports %q, which is empty", m[1])
+		}
+	}
+}
+
+// The default PR template must prompt contributors for every check and safety
+// invariant required by AGENTS.md.
+func TestPullRequestTemplateCoversGuidelines(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(".github", "PULL_REQUEST_TEMPLATE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := string(raw)
+	active := stripMarkdownFencesAndComments(tmpl)
+	for _, heading := range []string{
+		"## Behavior change",
+		"## Files",
+		"## Tests run",
+		"## Live-device notes",
+		"## Terminal output",
+		"## Checklist",
+	} {
+		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(heading) + `\s*$`).MatchString(active) {
+			t.Errorf("PULL_REQUEST_TEMPLATE.md missing active heading %q", heading)
+		}
+	}
+	for _, visible := range []string{
+		"gofmt",
+		"go vet",
+		"go test",
+		"--read-only",
+		"skills/google-messages/",
+		"internal/store/",
+		"session.json",
+	} {
+		if !strings.Contains(active, visible) {
+			t.Errorf("PULL_REQUEST_TEMPLATE.md active checklist does not mention %q", visible)
+		}
+	}
+	for _, prompt := range []string{"--store", "auth", "sync", "send", "history", "media"} {
+		if !strings.Contains(tmpl, prompt) {
+			t.Errorf("PULL_REQUEST_TEMPLATE.md does not prompt for %q", prompt)
+		}
+	}
+}
+
+func stripMarkdownFencesAndComments(s string) string {
+	noComments := regexp.MustCompile(`(?s)<!--.*?-->`).ReplaceAllString(s, "")
+	var out []string
+	var fenceChar byte
+	fenceLen := 0
+	for _, line := range strings.Split(noComments, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if fenceLen == 0 {
+			if n := countLeading(trimmed, '`'); n >= 3 {
+				fenceChar, fenceLen = '`', n
+				continue
+			}
+			if n := countLeading(trimmed, '~'); n >= 3 {
+				fenceChar, fenceLen = '~', n
+				continue
+			}
+			out = append(out, line)
+			continue
+		}
+		if n := countLeading(trimmed, fenceChar); n >= fenceLen && strings.TrimSpace(trimmed[n:]) == "" {
+			fenceChar, fenceLen = 0, 0
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func countLeading(s string, ch byte) int {
+	n := 0
+	for n < len(s) && s[n] == ch {
+		n++
+	}
+	return n
 }

@@ -23,10 +23,12 @@ cookies.json
 coverage.out
 *.coverprofile
 
-# Editor/OS and local agent noise. Shared .claude/ project files (settings.json,
-# skills) stay committable; only per-user overrides and worktrees are ignored.
+# Editor/OS and local agent noise. Shared agent files (AGENTS.md, CLAUDE.md,
+# .claude/settings.json, .claude/skills/) stay committable; only per-user
+# overrides and worktrees are ignored.
 .idea/
 .vscode/
 .DS_Store
+CLAUDE.local.md
 .claude/settings.local.json
 .claude/worktrees/
