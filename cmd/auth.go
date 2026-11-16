@@ -23,9 +23,9 @@ const maxCookieInputBytes = 1 << 20
 
 var cookieHeaderPattern = regexp.MustCompile(`(?i)(?:cookie\s*:\s*|(?:--cookie|-b)\s+['"])([^'"\r\n]+)`)
 
-type browserSignIn func(ctx context.Context, browserPath string, progress func(stage string)) (map[string]string, error)
+type browserSignIn func(context.Context, browserauth.Options) (map[string]string, error)
 
-type gaiaAuthenticator func(context.Context, paths.Layout, zerolog.Logger, map[string]string, bool, gm.EmojiRenderer) (*gm.PairResult, error)
+type gaiaAuthenticator func(context.Context, paths.Layout, zerolog.Logger, map[string]string, gm.PairOptions, gm.EmojiRenderer) (*gm.PairResult, error)
 
 // authDeps lets tests replace the browser and the pairing call.
 type authDeps struct {
@@ -99,6 +99,7 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 	var cookieFile string
 	var forceNew bool
 	var allowInsecure bool
+	var account string
 	c := &cobra.Command{
 		Use:   "auth",
 		Short: "Pair with Google Messages using a Google Account",
@@ -113,8 +114,12 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 			"With --json, progress is streamed to stdout as one JSON object per line " +
 			"(browser_starting, browser_ready, signed_in, validating, emoji, waiting_for_phone, " +
 			"then complete or error). Error events carry a stable code such as wrong_emoji " +
-			"or no_devices. See the README for the full list.",
+			"or no_devices. See the README for the full list.\n\n" +
+			"--account names the Google Account you intend to pair. The sign-in page opens on " +
+			"that account, and pairing stops with code wrong_account before the emoji step if " +
+			"Google reports a different one, or if the saved pairing belongs to another account.",
 		Example: "  gmcli auth\n" +
+			"  gmcli auth --account you@gmail.com\n" +
 			"  gmcli auth --new\n" +
 			"  gmcli auth --browser /path/to/chrome\n" +
 			"  gmcli --json auth\n" +
@@ -128,6 +133,7 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 				cookieFile:     cookieFile,
 				forceNew:       forceNew,
 				allowInsecure:  allowInsecure,
+				account:        account,
 			})
 			if err != nil {
 				report.emit(authEvent{Event: authEventError, Code: errorCode(err), Message: err.Error()})
@@ -140,6 +146,7 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 	c.Flags().StringVar(&cookieFile, "cookies-file", "", "cookie JSON or copied cURL file; use - for stdin")
 	c.Flags().BoolVar(&forceNew, "new", false, "create a new phone pairing instead of refreshing an existing Gaia session")
 	c.Flags().BoolVar(&allowInsecure, "allow-insecure-cookie-file", false, "allow group/world-readable cookie input files")
+	c.Flags().StringVar(&account, "account", "", "Google Account address to pair; refuses any other account")
 	c.MarkFlagsMutuallyExclusive("browser", "cookies-file")
 	return c
 }
@@ -150,11 +157,22 @@ type authOptions struct {
 	cookieFile     string
 	forceNew       bool
 	allowInsecure  bool
+	account        string
+}
+
+// validAccountAddress accepts the shape of an email address without trying to
+// be a full RFC 5322 parser: one @, something on both sides, no whitespace.
+func validAccountAddress(s string) bool {
+	local, domain, ok := strings.Cut(s, "@")
+	return ok && local != "" && domain != "" && !strings.ContainsAny(s, " \t\r\n") && !strings.Contains(domain, "@")
 }
 
 func runAuth(cmd *cobra.Command, deps authDeps, report authReporter, opts authOptions) error {
 	if opts.browserTimeout <= 0 {
 		return usageErrorf("--browser-timeout must be greater than zero")
+	}
+	if opts.account != "" && !validAccountAddress(opts.account) {
+		return usageErrorf("--account must be an email address such as you@gmail.com")
 	}
 	ctx, cancel := signalContext(cmd.Context())
 	defer cancel()
@@ -179,11 +197,15 @@ func runAuth(cmd *cobra.Command, deps authDeps, report authReporter, opts authOp
 			"The window will close automatically when sign-in is complete. Ctrl-C cancels.",
 		)
 		browserCtx, cancelBrowser := context.WithTimeout(ctx, opts.browserTimeout)
-		cookies, err = deps.signIn(browserCtx, opts.browserPath, func(stage string) {
-			report.emit(authEvent{Event: stage})
-			if stage == browserauth.StageSignedIn {
-				report.text("Signed in. Closing the browser...")
-			}
+		cookies, err = deps.signIn(browserCtx, browserauth.Options{
+			BrowserPath: opts.browserPath,
+			AccountHint: opts.account,
+			Progress: func(stage string) {
+				report.emit(authEvent{Event: stage})
+				if stage == browserauth.StageSignedIn {
+					report.text("Signed in. Closing the browser...")
+				}
+			},
 		})
 		cancelBrowser()
 		if err != nil {
@@ -205,7 +227,8 @@ func runAuth(cmd *cobra.Command, deps authDeps, report authReporter, opts authOp
 	}
 	report.emit(authEvent{Event: authEventValidating})
 	report.text("Validating Google Account session...")
-	res, err := deps.authenticate(ctx, layout, logger, cookies, opts.forceNew, func(emoji string) {
+	pairOpts := gm.PairOptions{ForceNew: opts.forceNew, ExpectedAccount: opts.account}
+	res, err := deps.authenticate(ctx, layout, logger, cookies, pairOpts, func(emoji string) {
 		report.emit(authEvent{Event: authEventEmoji, Emoji: emoji})
 		report.emit(authEvent{Event: authEventWaitingForPhone})
 		report.text(

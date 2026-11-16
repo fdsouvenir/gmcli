@@ -63,18 +63,43 @@ func codedErrorf(code string, format string, args ...any) error {
 	return &Error{code: code, err: fmt.Errorf(format, args...)}
 }
 
+// Options configures SignIn.
+type Options struct {
+	// BrowserPath selects the Chrome, Chromium or Edge executable; empty
+	// auto-detects.
+	BrowserPath string
+	// AccountHint, when set, pre-fills Google's account chooser with this
+	// address so the person lands on the intended account.
+	AccountHint string
+	// Progress, when non-nil, is called with each Stage constant as it is
+	// reached.
+	Progress func(stage string)
+}
+
+// signInURL returns the account chooser address, carrying the hint when set.
+func signInURL(accountHint string) string {
+	if accountHint == "" {
+		return loginURL
+	}
+	u, _ := url.Parse(loginURL)
+	q := u.Query()
+	q.Set("Email", accountHint)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // SignIn opens a visible Chrome/Chromium window. It never reads an existing
 // browser profile, asks for a password, or writes an intermediate cookie file.
 // The caller should provide a deadline for the user-controlled login step.
-// progress, when non-nil, is called with each Stage constant as it is reached.
-func SignIn(ctx context.Context, browserPath string, progress func(stage string)) (cookies map[string]string, err error) {
+func SignIn(ctx context.Context, opts Options) (cookies map[string]string, err error) {
+	progress := opts.Progress
 	if progress == nil {
 		progress = func(string) {}
 	}
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
 		return nil, codedErrorf(CodeNoDisplay, "browser sign-in needs a desktop display; run gmcli auth on your desktop, or use --cookies-file - for piped input on this server (see gmcli auth --help)")
 	}
-	path, err := findBrowser(browserPath)
+	path, err := findBrowser(opts.BrowserPath)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +113,7 @@ func SignIn(ctx context.Context, browserPath string, progress func(stage string)
 			err = cleanupErr
 		}
 	}()
-	if err := chromedp.Run(browserCtx, chromedp.Navigate(loginURL)); err != nil {
+	if err := chromedp.Run(browserCtx, chromedp.Navigate(signInURL(opts.AccountHint))); err != nil {
 		return nil, browserError(ctx, "could not open Google sign-in")
 	}
 	progress(StageBrowserReady)

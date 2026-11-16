@@ -164,7 +164,10 @@ gmcli auth --browser-timeout 10m
 
 If `session.json` already contains a Gaia pairing, `gmcli auth` checks the account
 and refreshes the session without a new emoji prompt. Pass `--new` to deliberately
-create a new phone pairing. A failed or cancelled attempt leaves the existing
+create a new phone pairing. Pass `--account you@gmail.com` to name the account
+you intend to pair: the sign-in page opens on that account, and pairing stops
+with `wrong_account` before the emoji step if Google reports a different one or
+the saved pairing belongs to another account. A failed or cancelled attempt leaves the existing
 session file unchanged. Close the sign-in window or press Ctrl-C to cancel.
 Then run `gmcli sync --follow` to refresh the archive.
 

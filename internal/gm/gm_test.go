@@ -488,7 +488,7 @@ func TestAuthenticateGaiaPairsAndPersistsOnlyAfterConfirmation(t *testing.T) {
 	var gotAuth *libgm.AuthData
 	var rendered string
 	res, err := authenticateGaia(
-		context.Background(), layout, zerolog.Nop(), testCookies(), false,
+		context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{},
 		func(emoji string) { rendered = emoji }, fakeGaiaFactory(fake, &gotAuth),
 	)
 	if err != nil {
@@ -546,7 +546,7 @@ func TestAuthenticateGaiaFailurePreservesExistingSession(t *testing.T) {
 			}
 			fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", fetchErr: tc.fetchErr, startErr: tc.startErr, finishErr: tc.finishErr}
 			var gotAuth *libgm.AuthData
-			_, err := authenticateGaia(context.Background(), layout, zerolog.Nop(), testCookies(), true, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
+			_, err := authenticateGaia(context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{ForceNew: true}, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
 			if err == nil {
 				t.Fatal("expected authentication failure")
 			}
@@ -596,7 +596,7 @@ func TestAuthenticateGaiaCancellationBeforeSavePreservesSession(t *testing.T) {
 			defer cancel()
 			fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", cancelAfterFinish: cancel, cancelAfterValidation: cancel}
 			var gotAuth *libgm.AuthData
-			_, err = authenticateGaia(ctx, layout, zerolog.Nop(), testCookies(), forceNew, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
+			_, err = authenticateGaia(ctx, layout, zerolog.Nop(), testCookies(), PairOptions{ForceNew: forceNew}, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("want cancellation, got %v", err)
 			}
@@ -623,7 +623,7 @@ func TestAuthenticateGaiaReauthenticatesSameAccount(t *testing.T) {
 	fake := &fakeGaiaClient{configEmail: "person@example.com"}
 	var gotAuth *libgm.AuthData
 	res, err := authenticateGaia(
-		context.Background(), layout, zerolog.Nop(), testCookies(), false,
+		context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{},
 		func(string) { t.Fatal("reauth should not render an emoji") }, fakeGaiaFactory(fake, &gotAuth),
 	)
 	if err != nil {
@@ -653,7 +653,7 @@ func TestAuthenticateGaiaRejectsDifferentAccountWithoutChangingSession(t *testin
 	fake := &fakeGaiaClient{configEmail: "other@example.com"}
 	var gotAuth *libgm.AuthData
 	_, err := authenticateGaia(
-		context.Background(), layout, zerolog.Nop(), testCookies(), false,
+		context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{},
 		func(string) {}, fakeGaiaFactory(fake, &gotAuth),
 	)
 	if err == nil || !strings.Contains(err.Error(), "different Google Account") || codeOf(err) != CodeWrongAccount {
@@ -680,7 +680,7 @@ func TestAuthenticateGaiaReauthValidationFailurePreservesSession(t *testing.T) {
 	}
 	var gotAuth *libgm.AuthData
 	_, err := authenticateGaia(
-		context.Background(), layout, zerolog.Nop(), testCookies(), false,
+		context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{},
 		func(string) {}, fakeGaiaFactory(fake, &gotAuth),
 	)
 	if err == nil || !strings.Contains(err.Error(), "pairing revoked") || codeOf(err) != CodePairingInvalid {
@@ -690,6 +690,62 @@ func TestAuthenticateGaiaReauthValidationFailurePreservesSession(t *testing.T) {
 	if string(after) != string(before) {
 		t.Fatalf("failed live validation changed existing session")
 	}
+}
+
+func TestAuthenticateGaiaExpectedAccount(t *testing.T) {
+	t.Run("new pairing refuses another account before the emoji step", func(t *testing.T) {
+		layout := testLayout(t)
+		fake := &fakeGaiaClient{configEmail: "other@example.com", emoji: "🦊"}
+		var gotAuth *libgm.AuthData
+		_, err := authenticateGaia(
+			context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{ExpectedAccount: "Person@Example.com"},
+			func(string) { t.Fatal("rendered an emoji for the wrong account") }, fakeGaiaFactory(fake, &gotAuth),
+		)
+		if codeOf(err) != CodeWrongAccount || fake.started {
+			t.Fatalf("err=%v started=%v", err, fake.started)
+		}
+		if !strings.Contains(err.Error(), "other@example.com") || !strings.Contains(err.Error(), "Person@Example.com") {
+			t.Fatalf("message does not name both accounts: %v", err)
+		}
+		if _, statErr := os.Stat(layout.Session); !os.IsNotExist(statErr) {
+			t.Fatal("rejected pairing wrote a session")
+		}
+	})
+	t.Run("new pairing accepts a case-insensitive match", func(t *testing.T) {
+		layout := testLayout(t)
+		fake := &fakeGaiaClient{configEmail: "person@example.com", emoji: "🦊", phoneID: "phone-1"}
+		var gotAuth *libgm.AuthData
+		res, err := authenticateGaia(
+			context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{ExpectedAccount: "PERSON@example.com"},
+			func(string) {}, fakeGaiaFactory(fake, &gotAuth),
+		)
+		if err != nil || res.Account != "person@example.com" {
+			t.Fatalf("res=%+v err=%v", res, err)
+		}
+	})
+	t.Run("refresh refuses when the saved pairing is another account", func(t *testing.T) {
+		layout := testLayout(t)
+		if err := layout.EnsureDirs(); err != nil {
+			t.Fatal(err)
+		}
+		if err := saveAuth(layout.Session, testGaiaAuth("saved@example.com")); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := os.ReadFile(layout.Session)
+		fake := &fakeGaiaClient{configEmail: "saved@example.com"}
+		var gotAuth *libgm.AuthData
+		_, err := authenticateGaia(
+			context.Background(), layout, zerolog.Nop(), testCookies(), PairOptions{ExpectedAccount: "wanted@example.com"},
+			func(string) {}, fakeGaiaFactory(fake, &gotAuth),
+		)
+		if codeOf(err) != CodeWrongAccount || !strings.Contains(err.Error(), "--new") || fake.fetched {
+			t.Fatalf("err=%v fetched=%v", err, fake.fetched)
+		}
+		after, _ := os.ReadFile(layout.Session)
+		if string(after) != string(before) {
+			t.Fatal("refused refresh changed the saved session")
+		}
+	})
 }
 
 type blockingGaiaClient struct {
@@ -716,7 +772,7 @@ func TestAuthenticateGaiaCancellationBoundsBlockingStart(t *testing.T) {
 	var gotAuth *libgm.AuthData
 	started := time.Now()
 	_, err := authenticateGaia(
-		ctx, layout, zerolog.Nop(), testCookies(), false,
+		ctx, layout, zerolog.Nop(), testCookies(), PairOptions{},
 		func(string) {}, func(auth *libgm.AuthData, _ zerolog.Logger) gaiaPairingClient {
 			gotAuth = auth
 			return fake

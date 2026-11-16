@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -85,6 +86,22 @@ func TestMissingBrowserGivesActionableError(t *testing.T) {
 	_, err := findBrowser("/nonexistent/gmcli-test-browser")
 	if err == nil || !strings.Contains(err.Error(), "--browser") {
 		t.Fatalf("missing browser error: %v", err)
+	}
+}
+
+func TestSignInURLCarriesAccountHint(t *testing.T) {
+	if got := signInURL(""); got != loginURL {
+		t.Fatalf("no hint changed the URL: %s", got)
+	}
+	got, err := url.Parse(signInURL("person+tag@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != "accounts.google.com" || got.Query().Get("Email") != "person+tag@example.com" {
+		t.Fatalf("hinted URL = %s", got)
+	}
+	if got.Query().Get("continue") != configURL {
+		t.Fatalf("hint dropped the continue target: %s", got)
 	}
 }
 

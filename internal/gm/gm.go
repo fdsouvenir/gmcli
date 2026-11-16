@@ -779,20 +779,29 @@ func newGaiaClient(auth *libgm.AuthData, logger zerolog.Logger) gaiaPairingClien
 	return &libgmGaiaClient{Client: libgm.NewClient(auth, nil, logger)}
 }
 
+// PairOptions tunes AuthenticateGaia.
+type PairOptions struct {
+	// ForceNew creates a new phone pairing even when a Gaia session exists.
+	ForceNew bool
+	// ExpectedAccount, when set, must match the account Google reports for the
+	// cookies (and, on a refresh, the saved pairing), compared case-insensitively.
+	ExpectedAccount string
+}
+
 // AuthenticateGaia pairs with Google Messages using Google Account cookies
 // and phone-side emoji confirmation. If a Gaia session already exists and
-// forceNew is false, it refreshes that session's cookies after verifying that
-// they belong to the same account. session.json is replaced only after the
-// complete operation succeeds.
+// opts.ForceNew is false, it refreshes that session's cookies after verifying
+// that they belong to the same account. session.json is replaced only after
+// the complete operation succeeds.
 func AuthenticateGaia(
 	ctx context.Context,
 	layout paths.Layout,
 	logger zerolog.Logger,
 	cookies map[string]string,
-	forceNew bool,
+	opts PairOptions,
 	render EmojiRenderer,
 ) (*PairResult, error) {
-	return authenticateGaia(ctx, layout, logger, cookies, forceNew, render, newGaiaClient)
+	return authenticateGaia(ctx, layout, logger, cookies, opts, render, newGaiaClient)
 }
 
 func authenticateGaia(
@@ -800,7 +809,7 @@ func authenticateGaia(
 	layout paths.Layout,
 	logger zerolog.Logger,
 	cookies map[string]string,
-	forceNew bool,
+	opts PairOptions,
 	render EmojiRenderer,
 	newClient gaiaClientFactory,
 ) (*PairResult, error) {
@@ -811,9 +820,9 @@ func authenticateGaia(
 	pairCtx, cancel := context.WithTimeout(ctx, PairTimeout)
 	defer cancel()
 
-	if !forceNew {
+	if !opts.ForceNew {
 		if auth, err := loadAuth(layout.Session); err == nil && auth.IsGoogleAccount() {
-			return reauthenticateGaia(pairCtx, layout, logger, auth, cookies, newClient)
+			return reauthenticateGaia(pairCtx, layout, logger, auth, cookies, opts.ExpectedAccount, newClient)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
@@ -830,6 +839,9 @@ func authenticateGaia(
 	account := cli.ConfigEmail()
 	if account == "" {
 		return nil, pairErrorf(CodeAccountUnknown, "Google Messages config did not identify an account")
+	}
+	if err := checkExpectedAccount(opts.ExpectedAccount, account); err != nil {
+		return nil, err
 	}
 	emoji, pairing, err := startGaiaPairingWithContext(pairCtx, cli)
 	if err != nil {
@@ -878,15 +890,29 @@ func startGaiaPairingWithContext(ctx context.Context, cli gaiaPairingClient) (st
 	}
 }
 
+// checkExpectedAccount compares the account Google reported against the one
+// the caller asked for. Addresses are not secrets; naming both makes the
+// mistake obvious.
+func checkExpectedAccount(expected, actual string) error {
+	if expected == "" || strings.EqualFold(expected, actual) {
+		return nil
+	}
+	return pairErrorf(CodeWrongAccount, "signed in as %s, but --account asked for %s", actual, expected)
+}
+
 func reauthenticateGaia(
 	ctx context.Context,
 	layout paths.Layout,
 	logger zerolog.Logger,
 	auth *libgm.AuthData,
 	cookies map[string]string,
+	expectedAccount string,
 	newClient gaiaClientFactory,
 ) (*PairResult, error) {
 	previousAccount := auth.Mobile.GetSourceID()
+	if expectedAccount != "" && !strings.EqualFold(previousAccount, expectedAccount) {
+		return nil, pairErrorf(CodeWrongAccount, "the saved pairing is for %s, not %s; pass --new to pair the other account", previousAccount, expectedAccount)
+	}
 	auth.SetCookies(cloneCookies(cookies))
 	cli := newClient(auth, logger)
 	defer cli.Disconnect()
