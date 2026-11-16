@@ -5,6 +5,7 @@
 | Version | Supported |
 | :--- | :--- |
 | `latest` (`main`) | :white_check_mark: |
+| `1.3.x` | :white_check_mark: |
 | `1.2.x` | :white_check_mark: |
 | `< 1.2.0` | :x: |
 
@@ -45,3 +46,6 @@ When submitting a report, please include:
    - Immediately open **Google Messages** on your phone.
    - Go to **Device pairing** / **Linked devices**.
    - Tap **Unpair all devices** to invalidate active Tachyon and Gaia session tokens.
+   - On the machine that held the session, run `gmcli auth remove --local-only` to delete `session.json`. When the pairing is still valid, plain `gmcli auth remove` asks the phone to drop just this device first.
+4. **Server sign-in socket**: `gmcli auth --devtools-socket PATH` relays the sign-in browser's DevTools endpoint over a Unix socket created with mode 0600. Anything that can connect to it can drive the browser while it is open, so keep the socket under a directory only your user can read (for example `$XDG_RUNTIME_DIR`), and reach it from another machine only through an SSH tunnel. gmcli removes the socket when it exits.
+5. **Alternate stores**: `GMCLI_STORE` and `--store` point gmcli at another data directory. Each store holds its own `session.json` with the same sensitivity; apply the permission guidance above to every store you create.
