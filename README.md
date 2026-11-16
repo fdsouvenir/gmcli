@@ -215,10 +215,20 @@ pairing emits no `emoji` or `waiting_for_phone` and completes with
 | `unpair_failed` | `auth remove` could not reach the phone; retry or pass `--local-only`. |
 | `cancelled` / `timeout` / `usage` / `failed` | Interrupted, deadline passed, invalid flags, or any other failure. |
 
-Cookie values never appear in events. Exit codes are unchanged: 0 success,
-1 failure, 2 invalid usage. Before v1.3.0, `--json` printed a single indented
-result object; consumers that parsed stdout as one document should read the
-`complete` line instead.
+Cookie values never appear in events. Before v1.3.0, `--json` printed a single
+indented result object; consumers that parsed stdout as one document should
+read the `complete` line instead.
+
+#### Exit codes
+
+Every command exits 0 on success, 1 on an operational failure, and 2 on invalid
+usage. Exit 3 means the saved Google Account session has been logged out and
+`gmcli auth` must be run again; `sync`, `sync --follow`, and `auth status
+--online` return it when Google reports the account signed out. A supervisor
+should treat 3 as "stop restarting and alert", not as a transient failure. Under
+`--json`, `sync` also prints one final `{"event":"error","code":…}` line to
+stdout when it stops with an error, so the code can be read without parsing the
+stderr log.
 
 #### Manual sign-in and remote servers
 
@@ -338,7 +348,7 @@ gmcli --json chats list | jq '.[0].name'
 
 | Flag             | Default                            | Purpose                                                  |
 | ---------------- | ---------------------------------- | -------------------------------------------------------- |
-| `--store DIR`    | `$XDG_STATE_HOME/gmcli`            | Where session, SQLite, and downloaded media live.        |
+| `--store DIR`    | `$GMCLI_STORE`, else `$XDG_STATE_HOME/gmcli` | Where session, SQLite, and downloaded media live. The environment variable suits supervisors and per-account wrappers. |
 | `--read-only`    | `true`                             | Block commands that send texts or reactions through the phone. |
 | `--json`         | `false`                            | Emit machine-readable output.                            |
 | `--full`         | `false`                            | Disable truncation in tabular output.                    |

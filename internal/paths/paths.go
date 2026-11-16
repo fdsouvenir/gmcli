@@ -15,13 +15,22 @@ type Layout struct {
 	MediaDir string // media/ (downloaded attachment cache)
 }
 
+// StoreEnv is the environment variable consulted when no --store flag is
+// given. Supervisors and per-account wrappers set it instead of passing the
+// flag on every invocation.
+const StoreEnv = "GMCLI_STORE"
+
 // Resolve returns the layout rooted at storeOverride if non-empty, otherwise
-// at $XDG_STATE_HOME/gmcli (falling back to $HOME/.local/state/gmcli). The
-// store directory holds session state, the SQLite archive, and cached media —
-// all of which are reproducible from the phone, so XDG_STATE_HOME is the
-// correct base under the spec. Matches wacli's choice.
+// at $GMCLI_STORE if set, otherwise at $XDG_STATE_HOME/gmcli (falling back to
+// $HOME/.local/state/gmcli). The store directory holds session state, the
+// SQLite archive, and cached media — all of which are reproducible from the
+// phone, so XDG_STATE_HOME is the correct base under the spec. Matches wacli's
+// choice.
 func Resolve(storeOverride string) (Layout, error) {
 	root := storeOverride
+	if root == "" {
+		root = os.Getenv(StoreEnv)
+	}
 	if root == "" {
 		var err error
 		root, err = defaultRoot()

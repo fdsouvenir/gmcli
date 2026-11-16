@@ -71,7 +71,11 @@ func TestHealthEventLifecycle(t *testing.T) {
 		t.Fatal(status)
 	}
 	select {
-	case <-p.Fatal():
+	case err := <-p.Fatal():
+		var coded *gm.PairError
+		if !errors.As(err, &coded) || coded.Code() != gm.CodeSessionLoggedOut {
+			t.Fatalf("logged-out fatal error has no session_logged_out code: %v", err)
+		}
 	default:
 		t.Fatal("missing fatal notification")
 	}

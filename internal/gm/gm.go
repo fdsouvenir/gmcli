@@ -83,7 +83,7 @@ func Open(layout paths.Layout, logger zerolog.Logger) (*Client, error) {
 		return nil, err
 	}
 	if auth.Browser == nil {
-		return nil, fmt.Errorf("session %s has no paired device; run `gmcli auth` first", layout.Session)
+		return nil, pairErrorf(CodeNotPaired, "session %s has no paired device; run `gmcli auth` first", layout.Session)
 	}
 	c := &Client{
 		auth:   auth,
@@ -980,14 +980,14 @@ func loadAuth(path string) (*libgm.AuthData, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no session at %s; run `gmcli auth` first: %w", path, os.ErrNotExist)
+			return nil, pairErrorf(CodeNoSession, "no session at %s; run `gmcli auth` first: %w", path, os.ErrNotExist)
 		}
-		return nil, fmt.Errorf("open session %s: %w", path, err)
+		return nil, pairErrorf(CodeSessionUnreadable, "open session %s: %w", path, err)
 	}
 	defer f.Close()
 	var auth libgm.AuthData
 	if err := json.NewDecoder(f).Decode(&auth); err != nil {
-		return nil, fmt.Errorf("decode session %s: %w", path, err)
+		return nil, pairErrorf(CodeSessionUnreadable, "decode session %s: %w", path, err)
 	}
 	return &auth, nil
 }

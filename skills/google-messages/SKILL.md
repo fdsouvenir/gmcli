@@ -289,6 +289,8 @@ clear which content came from messages versus your own analysis.
 - `1 issue(s) detected` from `doctor` means surface the issues list and stop.
 - FTS syntax error from `messages search` means retry once using the literal
   phrase quoting from the search playbook, then stop if it still fails.
+- Exit status 3 (gmcli 1.3.0 or newer) means the saved Google Account session
+  was logged out. Tell the user to run `gmcli auth` again; do not retry.
 - Any other non-zero exit means quote the literal error from stderr and stop.
   Do not retry with different arguments unless the user asks.
 

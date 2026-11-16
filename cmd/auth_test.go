@@ -404,6 +404,41 @@ func TestErrorCodeClassification(t *testing.T) {
 	}
 }
 
+func TestExitCodeDistinguishesLoggedOutSession(t *testing.T) {
+	loggedOut := fmt.Errorf("sync: %w", gm.NewPairError(gm.CodeSessionLoggedOut, errors.New("logged out")))
+	if got := ExitCode(loggedOut); got != ExitAuthRequired {
+		t.Fatalf("logged-out exit = %d, want %d", got, ExitAuthRequired)
+	}
+	other := gm.NewPairError(gm.CodePairingInvalid, errors.New("relay"))
+	if got := ExitCode(other); got != 1 {
+		t.Fatalf("other pairing failure exit = %d, want 1", got)
+	}
+	if got := ExitCode(usageErrorf("bad")); got != 2 {
+		t.Fatalf("usage exit = %d, want 2", got)
+	}
+}
+
+func TestReportCommandErrorWritesOneJSONLineOnlyWithJSON(t *testing.T) {
+	err := gm.NewPairError(gm.CodeSessionLoggedOut, errors.New("logged out"))
+	var out bytes.Buffer
+	if got := reportCommandError(&out, false, err); got != err || out.Len() != 0 {
+		t.Fatalf("human mode wrote %q", out.String())
+	}
+	if got := reportCommandError(&out, true, nil); got != nil || out.Len() != 0 {
+		t.Fatalf("nil error wrote %q", out.String())
+	}
+	if got := reportCommandError(&out, true, err); got != err {
+		t.Fatal("error was not returned unchanged")
+	}
+	var line commandError
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &line); jsonErr != nil {
+		t.Fatalf("not one JSON object: %q", out.String())
+	}
+	if line.Event != "error" || line.Code != gm.CodeSessionLoggedOut || line.Message != "logged out" {
+		t.Fatalf("line = %+v", line)
+	}
+}
+
 func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
 	oldFlags := flags
 	t.Cleanup(func() { flags = oldFlags })
