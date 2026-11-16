@@ -262,8 +262,8 @@ func TestAuthJSONStreamsEventsThroughPairing(t *testing.T) {
 
 	deps := authDeps{
 		signIn: func(_ context.Context, opts browserauth.Options) (map[string]string, error) {
-			opts.Progress(browserauth.StageBrowserReady)
-			opts.Progress(browserauth.StageSignedIn)
+			opts.Progress(browserauth.Event{Stage: browserauth.StageBrowserReady})
+			opts.Progress(browserauth.Event{Stage: browserauth.StageSignedIn})
 			return parseGoogleCookies([]byte(completeCookieJSON))
 		},
 		authenticate: func(_ context.Context, layout paths.Layout, _ zerolog.Logger, cookies map[string]string, opts gm.PairOptions, render gm.EmojiRenderer) (*gm.PairResult, error) {
@@ -358,6 +358,42 @@ func TestAuthAccountFlagReachesBrowserAndPairing(t *testing.T) {
 	}
 	if pairOpts.ExpectedAccount != "Person@Example.com" || !pairOpts.ForceNew {
 		t.Fatalf("pair options = %+v", pairOpts)
+	}
+}
+
+func TestAuthDevToolsSocketReachesBrowserAndEvent(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	flags.jsonOut = true
+	cmd := authCmdWithDeps(authDeps{
+		signIn: func(_ context.Context, opts browserauth.Options) (map[string]string, error) {
+			if opts.DevToolsSocket != "/tmp/viewer.sock" {
+				t.Fatalf("socket option = %q", opts.DevToolsSocket)
+			}
+			opts.Progress(browserauth.Event{Stage: browserauth.StageBrowserReady, DevToolsSocket: opts.DevToolsSocket, TargetID: "T1", VirtualDisplay: true})
+			return nil, errors.New("stop here")
+		},
+	})
+	silenceLikeRoot(cmd)
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--devtools-socket", "/tmp/viewer.sock"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected the fake sign-in error")
+	}
+	events := decodeAuthEvents(t, stdout.String())
+	if len(events) < 2 || events[1].Event != "browser_ready" || events[1].DevToolsSocket != "/tmp/viewer.sock" || events[1].TargetID != "T1" || !events[1].VirtualDisplay {
+		t.Fatalf("events = %+v", events)
+	}
+
+	conflict := authCmdWithDeps(authDeps{})
+	conflict.SetArgs([]string{"--devtools-socket", "/tmp/viewer.sock", "--cookies-file", "-"})
+	conflict.SetOut(&bytes.Buffer{})
+	conflict.SetErr(&bytes.Buffer{})
+	if err := conflict.Execute(); err == nil {
+		t.Fatal("--devtools-socket with --cookies-file was accepted")
 	}
 }
 

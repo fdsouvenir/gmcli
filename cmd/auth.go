@@ -45,14 +45,17 @@ func authCmdWithBrowser(signIn browserSignIn) *cobra.Command {
 // line is a complete JSON object; the final line is either "complete" or
 // "error". Cookie values never appear in events.
 type authEvent struct {
-	Event       string `json:"event"`
-	Emoji       string `json:"emoji,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Account     string `json:"account,omitempty"`
-	PhoneID     string `json:"phone_id,omitempty"`
-	SessionPath string `json:"session_path,omitempty"`
-	Code        string `json:"code,omitempty"`
-	Message     string `json:"message,omitempty"`
+	Event          string `json:"event"`
+	Emoji          string `json:"emoji,omitempty"`
+	Mode           string `json:"mode,omitempty"`
+	Account        string `json:"account,omitempty"`
+	PhoneID        string `json:"phone_id,omitempty"`
+	SessionPath    string `json:"session_path,omitempty"`
+	DevToolsSocket string `json:"devtools_socket,omitempty"`
+	TargetID       string `json:"target_id,omitempty"`
+	VirtualDisplay bool   `json:"virtual_display,omitempty"`
+	Code           string `json:"code,omitempty"`
+	Message        string `json:"message,omitempty"`
 }
 
 // Event names emitted by gmcli auth --json, in the order they can occur.
@@ -100,6 +103,7 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 	var forceNew bool
 	var allowInsecure bool
 	var account string
+	var devToolsSocket string
 	c := &cobra.Command{
 		Use:   "auth",
 		Short: "Pair with Google Messages using a Google Account",
@@ -117,12 +121,19 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 			"or no_devices. See the README for the full list.\n\n" +
 			"--account names the Google Account you intend to pair. The sign-in page opens on " +
 			"that account, and pairing stops with code wrong_account before the emoji step if " +
-			"Google reports a different one, or if the saved pairing belongs to another account.",
+			"Google reports a different one, or if the saved pairing belongs to another account.\n\n" +
+			"--devtools-socket PATH runs the sign-in browser on this machine for a viewer: the " +
+			"browser's DevTools endpoint is relayed over a private Unix socket (mode 0600) so a " +
+			"program running as you can show the window and forward clicks and keys. Without a " +
+			"desktop display, gmcli starts a virtual X server (Xvfb) for the browser; Google refuses " +
+			"headless Chrome, so a real display is required. The browser_ready event carries the " +
+			"socket path and the page target id.",
 		Example: "  gmcli auth\n" +
 			"  gmcli auth --account you@gmail.com\n" +
 			"  gmcli auth --new\n" +
 			"  gmcli auth --browser /path/to/chrome\n" +
 			"  gmcli --json auth\n" +
+			"  gmcli --json auth --devtools-socket /run/user/1000/gmcli-signin.sock\n" +
 			"  pbpaste | gmcli auth --cookies-file -",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -134,6 +145,7 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 				forceNew:       forceNew,
 				allowInsecure:  allowInsecure,
 				account:        account,
+				devToolsSocket: devToolsSocket,
 			})
 			if err != nil {
 				report.emit(authEvent{Event: authEventError, Code: errorCode(err), Message: err.Error()})
@@ -147,7 +159,9 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 	c.Flags().BoolVar(&forceNew, "new", false, "create a new phone pairing instead of refreshing an existing Gaia session")
 	c.Flags().BoolVar(&allowInsecure, "allow-insecure-cookie-file", false, "allow group/world-readable cookie input files")
 	c.Flags().StringVar(&account, "account", "", "Google Account address to pair; refuses any other account")
+	c.Flags().StringVar(&devToolsSocket, "devtools-socket", "", "relay the sign-in browser's DevTools endpoint over this private Unix socket for a viewer")
 	c.MarkFlagsMutuallyExclusive("browser", "cookies-file")
+	c.MarkFlagsMutuallyExclusive("devtools-socket", "cookies-file")
 	c.AddCommand(authStatusCmd())
 	c.AddCommand(authRemoveCmd())
 	return c
@@ -160,6 +174,7 @@ type authOptions struct {
 	forceNew       bool
 	allowInsecure  bool
 	account        string
+	devToolsSocket string
 }
 
 // validAccountAddress accepts the shape of an email address without trying to
@@ -200,11 +215,22 @@ func runAuth(cmd *cobra.Command, deps authDeps, report authReporter, opts authOp
 		)
 		browserCtx, cancelBrowser := context.WithTimeout(ctx, opts.browserTimeout)
 		cookies, err = deps.signIn(browserCtx, browserauth.Options{
-			BrowserPath: opts.browserPath,
-			AccountHint: opts.account,
-			Progress: func(stage string) {
-				report.emit(authEvent{Event: stage})
-				if stage == browserauth.StageSignedIn {
+			BrowserPath:    opts.browserPath,
+			AccountHint:    opts.account,
+			DevToolsSocket: opts.devToolsSocket,
+			Progress: func(ev browserauth.Event) {
+				report.emit(authEvent{
+					Event:          ev.Stage,
+					DevToolsSocket: ev.DevToolsSocket,
+					TargetID:       ev.TargetID,
+					VirtualDisplay: ev.VirtualDisplay,
+				})
+				switch ev.Stage {
+				case browserauth.StageBrowserReady:
+					if ev.DevToolsSocket != "" {
+						report.text("Sign-in browser is running. Attach a viewer to " + ev.DevToolsSocket + " (DevTools over a Unix socket).")
+					}
+				case browserauth.StageSignedIn:
 					report.text("Signed in. Closing the browser...")
 				}
 			},

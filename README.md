@@ -230,6 +230,34 @@ should treat 3 as "stop restarting and alert", not as a transient failure. Under
 stdout when it stops with an error, so the code can be read without parsing the
 stderr log.
 
+#### Sign in on a server through a viewer
+
+A machine without a desktop can still run the sign-in browser itself and let a
+viewer show it to the person:
+
+```sh
+gmcli --json auth --devtools-socket "$XDG_RUNTIME_DIR/gmcli-signin.sock"
+```
+
+gmcli starts Chrome on the existing display, or on a private virtual X server
+when none exists (install `xvfb`), and relays the browser's DevTools endpoint
+over the Unix socket, mode 0600. The `browser_ready` event carries
+`devtools_socket`, `target_id`, and `virtual_display`. A viewer running as the
+same user connects to the socket, speaks ordinary DevTools HTTP and WebSocket
+(send `Host: 127.0.0.1`; Chrome checks it), attaches to the page target, streams
+`Page.startScreencast` frames, and forwards `Input.*` events. Sign-in detection,
+cookie capture, the emoji step, and cleanup are unchanged; the socket is removed
+when gmcli exits.
+
+Chrome's headless mode is not an option here: Google refuses it ("This browser
+or app may not be secure") because headless reports `navigator.webdriver`.
+A visible Chrome on Xvfb, started with gmcli's flags, is accepted. See
+[docs/research/server-browser-signin.md](docs/research/server-browser-signin.md).
+
+Chrome does not read proxy credentials from `HTTP_PROXY`-style variables. On a
+host that routes egress through an authenticated proxy, run `gmcli auth` with
+those variables unset or the sign-in page will not load.
+
 #### Manual sign-in and remote servers
 
 The browser flow runs on the same machine as gmcli. For a server without a
