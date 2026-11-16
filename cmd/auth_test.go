@@ -3,13 +3,20 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/spf13/cobra"
+
+	"github.com/fdsouvenir/gmcli/internal/browserauth"
+	"github.com/fdsouvenir/gmcli/internal/gm"
 	"github.com/fdsouvenir/gmcli/internal/paths"
 	"github.com/fdsouvenir/gmcli/internal/store"
 )
@@ -72,6 +79,10 @@ func TestParseGoogleCookiesMissingNamesDoesNotLeakValues(t *testing.T) {
 func TestReadCookieInputEnforcesPrivatePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookies.json")
 	if err := os.WriteFile(path, []byte(completeCookieJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile honors the umask; force the insecure mode the test is about.
+	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readCookieInput(path, bytes.NewReader(nil), false); err == nil {
@@ -162,7 +173,7 @@ func TestPairingInvalidatesPriorHealthWithoutNetwork(t *testing.T) {
 func TestAuthWithoutFlagsStartsBrowserWithoutCookieFile(t *testing.T) {
 	want := errors.New("sign-in cancelled by test")
 	called := false
-	cmd := authCmdWithBrowser(func(ctx context.Context, path string) (map[string]string, error) {
+	cmd := authCmdWithBrowser(func(ctx context.Context, path string, _ func(string)) (map[string]string, error) {
 		called = true
 		if path != "" {
 			t.Fatalf("default browser path = %q", path)
@@ -189,7 +200,7 @@ func TestAuthRejectsConflictingOptionsBeforeBrowserLaunch(t *testing.T) {
 		{"--browser", "chrome", "--cookies-file", "-"},
 		{"--browser-timeout", "0s"},
 	} {
-		cmd := authCmdWithBrowser(func(context.Context, string) (map[string]string, error) {
+		cmd := authCmdWithBrowser(func(context.Context, string, func(string)) (map[string]string, error) {
 			t.Fatal("browser launched with invalid options")
 			return nil, nil
 		})
@@ -211,6 +222,155 @@ func TestMissingCookieFileSuggestsBrowserSignIn(t *testing.T) {
 	}
 }
 
+// silenceLikeRoot mirrors Root()'s SilenceUsage/SilenceErrors so a subcommand
+// executed on its own does not print cobra usage text into stdout.
+func silenceLikeRoot(cmd *cobra.Command) {
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+}
+
+// decodeAuthEvents parses the NDJSON stream written by gmcli --json auth.
+func decodeAuthEvents(t *testing.T, raw string) []authEvent {
+	t.Helper()
+	var events []authEvent
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		var ev authEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("event line is not a JSON object: %q: %v", line, err)
+		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+func eventNames(events []authEvent) []string {
+	names := make([]string, len(events))
+	for i, ev := range events {
+		names[i] = ev.Event
+	}
+	return names
+}
+
+func TestAuthJSONStreamsEventsThroughPairing(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	flags.jsonOut = true
+
+	deps := authDeps{
+		signIn: func(_ context.Context, _ string, progress func(string)) (map[string]string, error) {
+			progress(browserauth.StageBrowserReady)
+			progress(browserauth.StageSignedIn)
+			return parseGoogleCookies([]byte(completeCookieJSON))
+		},
+		authenticate: func(_ context.Context, layout paths.Layout, _ zerolog.Logger, cookies map[string]string, forceNew bool, render gm.EmojiRenderer) (*gm.PairResult, error) {
+			if cookies["SID"] != "sid-secret" || forceNew {
+				t.Fatalf("unexpected pairing input: cookies=%d forceNew=%v", len(cookies), forceNew)
+			}
+			render("🦊")
+			return &gm.PairResult{Mode: "paired", Account: "person@example.com", PhoneID: "phone-1", SessionPath: layout.Session}, nil
+		},
+	}
+	cmd := authCmdWithDeps(deps)
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("auth --json: %v", err)
+	}
+	events := decodeAuthEvents(t, stdout.String())
+	want := []string{"browser_starting", "browser_ready", "signed_in", "validating", "emoji", "waiting_for_phone", "complete"}
+	if got := eventNames(events); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event order = %v, want %v", got, want)
+	}
+	if events[4].Emoji != "🦊" {
+		t.Fatalf("emoji event = %+v", events[4])
+	}
+	last := events[len(events)-1]
+	if last.Mode != "paired" || last.Account != "person@example.com" || last.PhoneID != "phone-1" || last.SessionPath == "" {
+		t.Fatalf("complete event = %+v", last)
+	}
+	if strings.Contains(stdout.String(), "secret") {
+		t.Fatal("event stream leaked cookie values")
+	}
+	if strings.TrimSpace(stderr.String()) != "" {
+		t.Fatalf("--json wrote human text to stderr: %q", stderr.String())
+	}
+}
+
+func TestAuthJSONErrorEventCarriesPairingCode(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	flags.jsonOut = true
+
+	// A real PairError from the gm package, so the code round-trips through fmt wrapping.
+	cmd := authCmdWithDeps(authDeps{
+		authenticate: func(_ context.Context, _ paths.Layout, _ zerolog.Logger, _ map[string]string, _ bool, _ gm.EmojiRenderer) (*gm.PairResult, error) {
+			return nil, gm.NewPairError(gm.CodeWrongEmoji, errors.New("the wrong emoji was selected"))
+		},
+	})
+	silenceLikeRoot(cmd)
+	cmd.SetIn(strings.NewReader(completeCookieJSON))
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--cookies-file", "-"})
+	err := cmd.Execute()
+	if err == nil || ExitCode(err) != 1 {
+		t.Fatalf("error=%v exit=%d, want operational failure", err, ExitCode(err))
+	}
+	events := decodeAuthEvents(t, stdout.String())
+	last := events[len(events)-1]
+	if last.Event != "error" || last.Code != gm.CodeWrongEmoji || !strings.Contains(last.Message, "wrong emoji") {
+		t.Fatalf("error event = %+v", last)
+	}
+}
+
+func TestAuthJSONUsageErrorsAreCodedAsUsage(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.jsonOut = true
+	cmd := authCmd()
+	silenceLikeRoot(cmd)
+	cmd.SetIn(strings.NewReader(`{"SID":"secret"}`))
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--cookies-file", "-"})
+	if err := cmd.Execute(); err == nil || ExitCode(err) != 2 {
+		t.Fatalf("expected usage failure, got %v", err)
+	}
+	events := decodeAuthEvents(t, stdout.String())
+	if len(events) != 1 || events[0].Event != "error" || events[0].Code != codeUsage {
+		t.Fatalf("usage error events = %+v", events)
+	}
+	if strings.Contains(stdout.String(), "secret") {
+		t.Fatal("error event leaked cookie value")
+	}
+}
+
+func TestErrorCodeClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"pair error through wrapping", fmt.Errorf("authenticate: %w", gm.NewPairError(gm.CodeNoDevices, errors.New("x"))), gm.CodeNoDevices},
+		{"browser error", browserauth.NewError(browserauth.CodeBrowserTimeout, errors.New("x")), browserauth.CodeBrowserTimeout},
+		{"cancelled", context.Canceled, codeCancelled},
+		{"deadline", fmt.Errorf("wrapped: %w", context.DeadlineExceeded), codeTimeout},
+		{"usage", usageErrorf("bad flag"), codeUsage},
+		{"other", errors.New("boom"), codeFailed},
+	} {
+		if got := errorCode(tc.err); got != tc.want {
+			t.Errorf("%s: errorCode = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
 	oldFlags := flags
 	t.Cleanup(func() { flags = oldFlags })
@@ -224,7 +384,7 @@ func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := authCmdWithBrowser(func(context.Context, string) (map[string]string, error) {
+	cmd := authCmdWithBrowser(func(context.Context, string, func(string)) (map[string]string, error) {
 		cancel()
 		return parseGoogleCookies([]byte(completeCookieJSON))
 	})

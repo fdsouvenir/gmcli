@@ -26,12 +26,53 @@ const (
 	configURL = "https://messages.google.com/web/config"
 )
 
+// Progress stages reported by SignIn, in order.
+const (
+	StageBrowserReady = "browser_ready" // the sign-in page is open
+	StageSignedIn     = "signed_in"     // credentials were captured; the browser is closing
+)
+
+// Error codes for browser sign-in failures.
+const (
+	CodeNoDisplay       = "no_display"        // Linux without DISPLAY or WAYLAND_DISPLAY
+	CodeBrowserNotFound = "browser_not_found" // no supported browser executable
+	CodeBrowserFailed   = "browser_failed"    // the browser did not start or stopped early
+	CodeBrowserTimeout  = "browser_timeout"   // the sign-in deadline passed
+	CodeCleanupFailed   = "cleanup_failed"    // the temporary profile could not be removed
+)
+
+// Error carries a stable Code for scripts; the message stays human-readable
+// and never includes browser output.
+type Error struct {
+	code string
+	err  error
+}
+
+func (e *Error) Error() string { return e.err.Error() }
+func (e *Error) Unwrap() error { return e.err }
+
+// Code returns the stable browser sign-in error code.
+func (e *Error) Code() string { return e.code }
+
+// NewError wraps err with a stable code.
+func NewError(code string, err error) *Error {
+	return &Error{code: code, err: err}
+}
+
+func codedErrorf(code string, format string, args ...any) error {
+	return &Error{code: code, err: fmt.Errorf(format, args...)}
+}
+
 // SignIn opens a visible Chrome/Chromium window. It never reads an existing
 // browser profile, asks for a password, or writes an intermediate cookie file.
 // The caller should provide a deadline for the user-controlled login step.
-func SignIn(ctx context.Context, browserPath string) (cookies map[string]string, err error) {
+// progress, when non-nil, is called with each Stage constant as it is reached.
+func SignIn(ctx context.Context, browserPath string, progress func(stage string)) (cookies map[string]string, err error) {
+	if progress == nil {
+		progress = func(string) {}
+	}
 	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-		return nil, errors.New("browser sign-in needs a desktop display; run gmcli auth on your desktop, or use --cookies-file - for piped input on this server (see gmcli auth --help)")
+		return nil, codedErrorf(CodeNoDisplay, "browser sign-in needs a desktop display; run gmcli auth on your desktop, or use --cookies-file - for piped input on this server (see gmcli auth --help)")
 	}
 	path, err := findBrowser(browserPath)
 	if err != nil {
@@ -50,23 +91,25 @@ func SignIn(ctx context.Context, browserPath string) (cookies map[string]string,
 	if err := chromedp.Run(browserCtx, chromedp.Navigate(loginURL)); err != nil {
 		return nil, browserError(ctx, "could not open Google sign-in")
 	}
+	progress(StageBrowserReady)
 	cookies, err = waitForCookies(browserCtx, browserSnapshot, time.Second)
 	if err != nil {
 		return nil, browserError(ctx, "browser closed or disconnected before sign-in completed")
 	}
+	progress(StageSignedIn)
 	return cookies, nil
 }
 
 func browserError(ctx context.Context, message string) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("browser sign-in timed out; run gmcli auth again or increase --browser-timeout: %w", ctx.Err())
+		return codedErrorf(CodeBrowserTimeout, "browser sign-in timed out; run gmcli auth again or increase --browser-timeout: %w", ctx.Err())
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	// Browser errors can include URLs, headers and process output. Never return
 	// that text to logs or the terminal after a user has started signing in.
-	return fmt.Errorf("%s; run gmcli auth again, or use --cookies-file - (see gmcli auth --help)", message)
+	return codedErrorf(CodeBrowserFailed, "%s; run gmcli auth again, or use --cookies-file - (see gmcli auth --help)", message)
 }
 
 func newBrowser(ctx context.Context, path string, extra ...chromedp.ExecAllocatorOption) (context.Context, func() error, error) {
@@ -74,13 +117,13 @@ func newBrowser(ctx context.Context, path string, extra ...chromedp.ExecAllocato
 	// sign-in. Choose an available loopback port before starting the browser.
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		return nil, nil, errors.New("could not allocate a local sign-in browser connection")
+		return nil, nil, codedErrorf(CodeBrowserFailed, "could not allocate a local sign-in browser connection")
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
 	profile, err := os.MkdirTemp("", "gmcli-auth-")
 	if err != nil {
-		return nil, nil, fmt.Errorf("create temporary sign-in profile: %w", err)
+		return nil, nil, codedErrorf(CodeBrowserFailed, "create temporary sign-in profile: %w", err)
 	}
 	// Use a normal, visible browser, without chromedp's automation defaults.
 	// DBSC binds credentials to Chrome; libgm needs reusable cookies. These
@@ -111,7 +154,7 @@ func newBrowser(ctx context.Context, path string, extra ...chromedp.ExecAllocato
 		cancelBrowser()
 		cancelAllocator() // wait for the process to exit before removing its data
 		if err := os.RemoveAll(profile); err != nil {
-			return fmt.Errorf("could not remove temporary sign-in profile %s; remove it manually", profile)
+			return codedErrorf(CodeCleanupFailed, "could not remove temporary sign-in profile %s; remove it manually", profile)
 		}
 		return nil
 	}
@@ -189,7 +232,7 @@ func findBrowser(requested string) (string, error) {
 	if requested != "" {
 		path, err := exec.LookPath(requested)
 		if err != nil {
-			return "", errors.New("--browser must name an installed Chrome, Chromium or Edge executable")
+			return "", codedErrorf(CodeBrowserNotFound, "--browser must name an installed Chrome, Chromium or Edge executable")
 		}
 		return path, nil
 	}
@@ -215,5 +258,5 @@ func findBrowser(requested string) (string, error) {
 			return path, nil
 		}
 	}
-	return "", errors.New("no supported sign-in browser found; install Chrome, Chromium or Edge, select one with --browser /path/to/browser, or use --cookies-file - (see gmcli auth --help)")
+	return "", codedErrorf(CodeBrowserNotFound, "no supported sign-in browser found; install Chrome, Chromium or Edge, select one with --browser /path/to/browser, or use --cookies-file - (see gmcli auth --help)")
 }

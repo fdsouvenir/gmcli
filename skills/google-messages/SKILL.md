@@ -100,7 +100,10 @@ instruction layer published from the canonical gmcli repository.
   the user to follow gmcli's Google Account pairing instructions and run
   `gmcli auth` (browser sign-in and phone emoji confirmation) or `gmcli sync --follow`
   themselves; do not run those yourself. Never ask the user to paste Google
-  cookies or `session.json` into chat, and never read either one.
+  cookies or `session.json` into chat, and never read either one. If the user
+  reports an `auth` failure, ask for the `code` from its `error` line
+  (gmcli 1.3.0 or newer with `--json`), not the full output, and explain it
+  from the README's code table.
 - Setting aliases or labels ("call her Mom from now on"). Do not run them
   from this skill. Tell the user the exact command to run themselves.
 - Downloading media. If the user wants to see an attachment, give them the

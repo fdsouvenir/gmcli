@@ -670,6 +670,46 @@ type PairResult struct {
 // user must tap in Google Messages on their phone.
 type EmojiRenderer func(emoji string)
 
+// Pairing error codes. They are stable identifiers for scripts and agent
+// harnesses; the wrapped messages remain human-readable.
+const (
+	CodeCookiesRejected  = "cookies_rejected"   // Google did not accept the supplied cookies
+	CodeCookiesMissing   = "cookies_missing"    // required cookie names were absent
+	CodeAccountUnknown   = "account_unknown"    // Google's config did not name an account
+	CodeWrongAccount     = "wrong_account"      // cookies belong to a different account
+	CodeNoDevices        = "no_devices"         // no phone has Google Account pairing enabled
+	CodePhoneUnreachable = "phone_unreachable"  // the phone did not answer the pairing request
+	CodeWrongEmoji       = "wrong_emoji"        // a different emoji was tapped on the phone
+	CodeCancelledOnPhone = "cancelled_on_phone" // the person declined on the phone
+	CodePairingTimeout   = "pairing_timeout"    // the phone did not confirm in time
+	CodePairingInvalid   = "pairing_invalid"    // the saved pairing was rejected by the relay
+	CodeSessionWrite     = "session_write_failed"
+	CodePairingFailed    = "pairing_failed" // any other pairing failure
+)
+
+// PairError carries a stable Code alongside the wrapped cause. Use
+// errors.As to read the code; errors.Is still matches the libgm sentinel.
+type PairError struct {
+	code string
+	err  error
+}
+
+func (e *PairError) Error() string { return e.err.Error() }
+func (e *PairError) Unwrap() error { return e.err }
+
+// Code returns the stable pairing error code.
+func (e *PairError) Code() string { return e.code }
+
+// NewPairError wraps err with a stable code. It exists for callers and tests
+// that need to construct coded errors outside this package.
+func NewPairError(code string, err error) *PairError {
+	return &PairError{code: code, err: err}
+}
+
+func pairErrorf(code string, format string, args ...any) error {
+	return &PairError{code: code, err: fmt.Errorf(format, args...)}
+}
+
 type gaiaPairingClient interface {
 	FetchConfig(context.Context) error
 	ConfigEmail() string
@@ -785,11 +825,11 @@ func authenticateGaia(
 	defer cli.Disconnect()
 
 	if err := cli.FetchConfig(pairCtx); err != nil {
-		return nil, fmt.Errorf("validate Google Account cookies: %w", err)
+		return nil, pairErrorf(CodeCookiesRejected, "validate Google Account cookies: %w", err)
 	}
 	account := cli.ConfigEmail()
 	if account == "" {
-		return nil, errors.New("Google Messages config did not identify an account")
+		return nil, pairErrorf(CodeAccountUnknown, "Google Messages config did not identify an account")
 	}
 	emoji, pairing, err := startGaiaPairingWithContext(pairCtx, cli)
 	if err != nil {
@@ -804,7 +844,7 @@ func authenticateGaia(
 		return nil, err
 	}
 	if err := saveAuth(layout.Session, auth); err != nil {
-		return nil, fmt.Errorf("persist session: %w", err)
+		return nil, pairErrorf(CodeSessionWrite, "persist session: %w", err)
 	}
 	return &PairResult{
 		Mode:        "paired",
@@ -852,20 +892,23 @@ func reauthenticateGaia(
 	defer cli.Disconnect()
 
 	if err := cli.FetchConfig(ctx); err != nil {
-		return nil, fmt.Errorf("validate replacement Google Account cookies: %w", err)
+		return nil, pairErrorf(CodeCookiesRejected, "validate replacement Google Account cookies: %w", err)
 	}
 	account := cli.ConfigEmail()
 	if previousAccount == "" || account == "" || !strings.EqualFold(previousAccount, account) {
-		return nil, fmt.Errorf("cookies belong to a different Google Account; use the original account or pass --new")
+		return nil, pairErrorf(CodeWrongAccount, "cookies belong to a different Google Account; use the original account or pass --new")
 	}
 	if err := cli.ValidateConnection(ctx); err != nil {
-		return nil, fmt.Errorf("validate existing Google Messages pairing: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, pairErrorf(CodePairingInvalid, "validate existing Google Messages pairing: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := saveAuth(layout.Session, auth); err != nil {
-		return nil, fmt.Errorf("persist refreshed session: %w", err)
+		return nil, pairErrorf(CodeSessionWrite, "persist refreshed session: %w", err)
 	}
 	return &PairResult{
 		Mode:        "reauthenticated",
@@ -884,20 +927,24 @@ func cloneCookies(in map[string]string) map[string]string {
 
 func describeGaiaPairingError(stage string, err error) error {
 	switch {
+	case errors.Is(err, context.Canceled):
+		// Caller cancellation (Ctrl-C) is not a pairing failure; keep it bare so
+		// errors.Is(err, context.Canceled) continues to hold.
+		return err
 	case errors.Is(err, libgm.ErrNoCookies):
-		return fmt.Errorf("%s Gaia pairing: required Google Account cookies are missing: %w", stage, err)
+		return pairErrorf(CodeCookiesMissing, "%s Gaia pairing: required Google Account cookies are missing: %w", stage, err)
 	case errors.Is(err, libgm.ErrNoDevicesFound):
-		return fmt.Errorf("%s Gaia pairing: no phone has Google Account pairing enabled; open Google Messages > Device pairing on the phone: %w", stage, err)
+		return pairErrorf(CodeNoDevices, "%s Gaia pairing: no phone has Google Account pairing enabled; open Google Messages > Device pairing on the phone: %w", stage, err)
 	case errors.Is(err, libgm.ErrPairingInitTimeout):
-		return fmt.Errorf("%s Gaia pairing: phone did not respond; keep Google Messages open and disable battery optimization temporarily: %w", stage, err)
+		return pairErrorf(CodePhoneUnreachable, "%s Gaia pairing: phone did not respond; keep Google Messages open and disable battery optimization temporarily: %w", stage, err)
 	case errors.Is(err, libgm.ErrIncorrectEmoji):
-		return fmt.Errorf("%s Gaia pairing: the wrong emoji was selected on the phone: %w", stage, err)
+		return pairErrorf(CodeWrongEmoji, "%s Gaia pairing: the wrong emoji was selected on the phone: %w", stage, err)
 	case errors.Is(err, libgm.ErrPairingCancelled):
-		return fmt.Errorf("%s Gaia pairing: confirmation was cancelled on the phone: %w", stage, err)
+		return pairErrorf(CodeCancelledOnPhone, "%s Gaia pairing: confirmation was cancelled on the phone: %w", stage, err)
 	case errors.Is(err, libgm.ErrPairingTimeout), errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%s Gaia pairing: confirmation timed out; run `gmcli auth` again: %w", stage, err)
+		return pairErrorf(CodePairingTimeout, "%s Gaia pairing: confirmation timed out; run `gmcli auth` again: %w", stage, err)
 	default:
-		return fmt.Errorf("%s Gaia pairing: %w", stage, err)
+		return pairErrorf(CodePairingFailed, "%s Gaia pairing: %w", stage, err)
 	}
 }
 

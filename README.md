@@ -171,6 +171,49 @@ Then run `gmcli sync --follow` to refresh the archive.
 QR pairing has been retired by Google. Existing QR sessions can still be queried
 offline; running `auth` migrates to Google Account pairing.
 
+#### Scripted sign-in with `--json`
+
+`gmcli --json auth` streams progress to stdout as one JSON object per line so a
+wrapper or agent harness can relay the emoji and report failures without parsing
+terminal text. Events arrive in this order; the final line is `complete` or
+`error`:
+
+```
+{"event":"browser_starting"}
+{"event":"browser_ready"}
+{"event":"signed_in"}
+{"event":"validating"}
+{"event":"emoji","emoji":"🦊"}
+{"event":"waiting_for_phone"}
+{"event":"complete","mode":"paired","account":"you@example.com","phone_id":"…","session_path":"…/session.json"}
+```
+
+With `--cookies-file` the browser events are skipped. A refresh of an existing
+pairing emits no `emoji` or `waiting_for_phone` and completes with
+`"mode":"reauthenticated"`. Error events carry a stable `code` and a `message`:
+
+| Code | Meaning |
+| --- | --- |
+| `no_display` | Linux without `DISPLAY` or `WAYLAND_DISPLAY`; use `--cookies-file`. |
+| `browser_not_found` | No Chrome, Chromium, or Edge; pass `--browser`. |
+| `browser_failed` | The browser did not start or closed before sign-in finished. |
+| `browser_timeout` | `--browser-timeout` passed before sign-in finished. |
+| `cookies_missing` / `cookies_rejected` | Required cookies were absent, or Google refused them. |
+| `account_unknown` | Google's config did not name an account. |
+| `wrong_account` | Cookies belong to a different account than the saved pairing; pass `--new`. |
+| `no_devices` | No phone has Google Account pairing enabled. |
+| `phone_unreachable` | The phone did not answer the pairing request. |
+| `wrong_emoji` / `cancelled_on_phone` | The person tapped a different emoji or declined. |
+| `pairing_timeout` | The phone did not confirm within five minutes. |
+| `pairing_invalid` | The relay rejected the saved pairing during a refresh. |
+| `session_write_failed` | `session.json` could not be written. |
+| `cancelled` / `timeout` / `usage` / `failed` | Interrupted, deadline passed, invalid flags, or any other failure. |
+
+Cookie values never appear in events. Exit codes are unchanged: 0 success,
+1 failure, 2 invalid usage. Before v1.3.0, `--json` printed a single indented
+result object; consumers that parsed stdout as one document should read the
+`complete` line instead.
+
 #### Manual sign-in and remote servers
 
 The browser flow runs on the same machine as gmcli. For a server without a

@@ -417,6 +417,14 @@ func TestSendTextRejectsUnknownSendMode(t *testing.T) {
 	}
 }
 
+func codeOf(err error) string {
+	var coded *PairError
+	if errors.As(err, &coded) {
+		return coded.Code()
+	}
+	return ""
+}
+
 type fakeGaiaClient struct {
 	configEmail           string
 	fetchErr              error
@@ -515,12 +523,17 @@ func TestAuthenticateGaiaFailurePreservesExistingSession(t *testing.T) {
 	for _, tc := range []struct {
 		name                          string
 		fetchErr, startErr, finishErr error
+		code                          string
 	}{
-		{name: "invalid cookies", fetchErr: errors.New("invalid cookies")},
-		{name: "no phone", startErr: libgm.ErrNoDevicesFound},
-		{name: "wrong emoji", finishErr: libgm.ErrIncorrectEmoji},
-		{name: "phone cancellation", finishErr: libgm.ErrPairingCancelled},
-		{name: "deadline", finishErr: context.DeadlineExceeded},
+		{name: "invalid cookies", fetchErr: errors.New("invalid cookies"), code: CodeCookiesRejected},
+		{name: "no phone", startErr: libgm.ErrNoDevicesFound, code: CodeNoDevices},
+		{name: "phone unreachable", startErr: libgm.ErrPairingInitTimeout, code: CodePhoneUnreachable},
+		{name: "missing cookies", startErr: libgm.ErrNoCookies, code: CodeCookiesMissing},
+		{name: "wrong emoji", finishErr: libgm.ErrIncorrectEmoji, code: CodeWrongEmoji},
+		{name: "phone cancellation", finishErr: libgm.ErrPairingCancelled, code: CodeCancelledOnPhone},
+		{name: "relay timeout", finishErr: libgm.ErrPairingTimeout, code: CodePairingTimeout},
+		{name: "deadline", finishErr: context.DeadlineExceeded, code: CodePairingTimeout},
+		{name: "other", finishErr: errors.New("relay exploded"), code: CodePairingFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout := testLayout(t)
@@ -536,6 +549,20 @@ func TestAuthenticateGaiaFailurePreservesExistingSession(t *testing.T) {
 			_, err := authenticateGaia(context.Background(), layout, zerolog.Nop(), testCookies(), true, func(string) {}, fakeGaiaFactory(fake, &gotAuth))
 			if err == nil {
 				t.Fatal("expected authentication failure")
+			}
+			var coded *PairError
+			if !errors.As(err, &coded) || coded.Code() != tc.code {
+				t.Fatalf("error %v has code %q, want %q", err, codeOf(err), tc.code)
+			}
+			cause := tc.fetchErr
+			if cause == nil {
+				cause = tc.startErr
+			}
+			if cause == nil {
+				cause = tc.finishErr
+			}
+			if !errors.Is(err, cause) {
+				t.Fatalf("coded error %v no longer matches its cause %v", err, cause)
 			}
 			after, readErr := os.ReadFile(layout.Session)
 			if readErr != nil {
@@ -629,8 +656,8 @@ func TestAuthenticateGaiaRejectsDifferentAccountWithoutChangingSession(t *testin
 		context.Background(), layout, zerolog.Nop(), testCookies(), false,
 		func(string) {}, fakeGaiaFactory(fake, &gotAuth),
 	)
-	if err == nil || !strings.Contains(err.Error(), "different Google Account") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "different Google Account") || codeOf(err) != CodeWrongAccount {
+		t.Fatalf("unexpected error: %v (code %q)", err, codeOf(err))
 	}
 	after, _ := os.ReadFile(layout.Session)
 	if string(after) != string(before) {
@@ -656,8 +683,8 @@ func TestAuthenticateGaiaReauthValidationFailurePreservesSession(t *testing.T) {
 		context.Background(), layout, zerolog.Nop(), testCookies(), false,
 		func(string) {}, fakeGaiaFactory(fake, &gotAuth),
 	)
-	if err == nil || !strings.Contains(err.Error(), "pairing revoked") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "pairing revoked") || codeOf(err) != CodePairingInvalid {
+		t.Fatalf("unexpected error: %v (code %q)", err, codeOf(err))
 	}
 	after, _ := os.ReadFile(layout.Session)
 	if string(after) != string(before) {
