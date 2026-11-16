@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/fdsouvenir/gmcli/internal/gm"
 )
 
 type usageError struct {
@@ -42,8 +44,14 @@ func minimumNArgs(n int) cobra.PositionalArgs {
 	}
 }
 
+// ExitAuthRequired is returned when the saved Google Account session has been
+// logged out and `gmcli auth` must be run again. Supervisors should stop
+// restarting and alert instead of looping.
+const ExitAuthRequired = 3
+
 // ExitCode classifies CLI failures for shell and agent callers.
-// 0 is success, 1 is an operational failure, and 2 is invalid usage.
+// 0 is success, 1 is an operational failure, 2 is invalid usage, and 3 means
+// the saved session is logged out and re-authentication is required.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -51,6 +59,9 @@ func ExitCode(err error) int {
 	var usage usageError
 	if errors.As(err, &usage) {
 		return 2
+	}
+	if errorCode(err) == gm.CodeSessionLoggedOut {
+		return ExitAuthRequired
 	}
 	// Cobra constructs unknown-command failures internally, outside the
 	// positional and flag validators we can wrap above.

@@ -41,9 +41,29 @@ func TestEnsureDirsCreatesTree(t *testing.T) {
 	}
 }
 
+func TestResolveStoreEnvBeatsXDGButNotFlag(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-test")
+	t.Setenv(paths.StoreEnv, "/tmp/env-store")
+	got, err := paths.Resolve("")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Root != "/tmp/env-store" {
+		t.Errorf("root = %s, want /tmp/env-store", got.Root)
+	}
+	got, err = paths.Resolve("/tmp/flag-store")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Root != "/tmp/flag-store" {
+		t.Errorf("flag did not win over env: %s", got.Root)
+	}
+}
+
 func TestResolveRespectsXDG(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-test")
 	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv(paths.StoreEnv, "")
 	got, err := paths.Resolve("")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

@@ -173,10 +173,10 @@ func TestPairingInvalidatesPriorHealthWithoutNetwork(t *testing.T) {
 func TestAuthWithoutFlagsStartsBrowserWithoutCookieFile(t *testing.T) {
 	want := errors.New("sign-in cancelled by test")
 	called := false
-	cmd := authCmdWithBrowser(func(ctx context.Context, path string, _ func(string)) (map[string]string, error) {
+	cmd := authCmdWithBrowser(func(ctx context.Context, opts browserauth.Options) (map[string]string, error) {
 		called = true
-		if path != "" {
-			t.Fatalf("default browser path = %q", path)
+		if opts.BrowserPath != "" || opts.AccountHint != "" {
+			t.Fatalf("default browser options = %+v", opts)
 		}
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("browser sign-in has no timeout")
@@ -199,8 +199,11 @@ func TestAuthRejectsConflictingOptionsBeforeBrowserLaunch(t *testing.T) {
 	for _, args := range [][]string{
 		{"--browser", "chrome", "--cookies-file", "-"},
 		{"--browser-timeout", "0s"},
+		{"--account", "not-an-address"},
+		{"--account", "two@at@signs"},
+		{"--account", "spaced out@example.com"},
 	} {
-		cmd := authCmdWithBrowser(func(context.Context, string, func(string)) (map[string]string, error) {
+		cmd := authCmdWithBrowser(func(context.Context, browserauth.Options) (map[string]string, error) {
 			t.Fatal("browser launched with invalid options")
 			return nil, nil
 		})
@@ -258,14 +261,14 @@ func TestAuthJSONStreamsEventsThroughPairing(t *testing.T) {
 	flags.jsonOut = true
 
 	deps := authDeps{
-		signIn: func(_ context.Context, _ string, progress func(string)) (map[string]string, error) {
-			progress(browserauth.StageBrowserReady)
-			progress(browserauth.StageSignedIn)
+		signIn: func(_ context.Context, opts browserauth.Options) (map[string]string, error) {
+			opts.Progress(browserauth.Event{Stage: browserauth.StageBrowserReady})
+			opts.Progress(browserauth.Event{Stage: browserauth.StageSignedIn})
 			return parseGoogleCookies([]byte(completeCookieJSON))
 		},
-		authenticate: func(_ context.Context, layout paths.Layout, _ zerolog.Logger, cookies map[string]string, forceNew bool, render gm.EmojiRenderer) (*gm.PairResult, error) {
-			if cookies["SID"] != "sid-secret" || forceNew {
-				t.Fatalf("unexpected pairing input: cookies=%d forceNew=%v", len(cookies), forceNew)
+		authenticate: func(_ context.Context, layout paths.Layout, _ zerolog.Logger, cookies map[string]string, opts gm.PairOptions, render gm.EmojiRenderer) (*gm.PairResult, error) {
+			if cookies["SID"] != "sid-secret" || opts.ForceNew || opts.ExpectedAccount != "" {
+				t.Fatalf("unexpected pairing input: cookies=%d opts=%+v", len(cookies), opts)
 			}
 			render("🦊")
 			return &gm.PairResult{Mode: "paired", Account: "person@example.com", PhoneID: "phone-1", SessionPath: layout.Session}, nil
@@ -307,7 +310,7 @@ func TestAuthJSONErrorEventCarriesPairingCode(t *testing.T) {
 
 	// A real PairError from the gm package, so the code round-trips through fmt wrapping.
 	cmd := authCmdWithDeps(authDeps{
-		authenticate: func(_ context.Context, _ paths.Layout, _ zerolog.Logger, _ map[string]string, _ bool, _ gm.EmojiRenderer) (*gm.PairResult, error) {
+		authenticate: func(_ context.Context, _ paths.Layout, _ zerolog.Logger, _ map[string]string, _ gm.PairOptions, _ gm.EmojiRenderer) (*gm.PairResult, error) {
 			return nil, gm.NewPairError(gm.CodeWrongEmoji, errors.New("the wrong emoji was selected"))
 		},
 	})
@@ -325,6 +328,72 @@ func TestAuthJSONErrorEventCarriesPairingCode(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Event != "error" || last.Code != gm.CodeWrongEmoji || !strings.Contains(last.Message, "wrong emoji") {
 		t.Fatalf("error event = %+v", last)
+	}
+}
+
+func TestAuthAccountFlagReachesBrowserAndPairing(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	var hint string
+	var pairOpts gm.PairOptions
+	cmd := authCmdWithDeps(authDeps{
+		signIn: func(_ context.Context, opts browserauth.Options) (map[string]string, error) {
+			hint = opts.AccountHint
+			return parseGoogleCookies([]byte(completeCookieJSON))
+		},
+		authenticate: func(_ context.Context, layout paths.Layout, _ zerolog.Logger, _ map[string]string, opts gm.PairOptions, _ gm.EmojiRenderer) (*gm.PairResult, error) {
+			pairOpts = opts
+			return &gm.PairResult{Mode: "reauthenticated", Account: "person@example.com", SessionPath: layout.Session}, nil
+		},
+	})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--account", "Person@Example.com", "--new"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if hint != "Person@Example.com" {
+		t.Fatalf("browser hint = %q", hint)
+	}
+	if pairOpts.ExpectedAccount != "Person@Example.com" || !pairOpts.ForceNew {
+		t.Fatalf("pair options = %+v", pairOpts)
+	}
+}
+
+func TestAuthDevToolsSocketReachesBrowserAndEvent(t *testing.T) {
+	oldFlags := flags
+	t.Cleanup(func() { flags = oldFlags })
+	flags.storeDir = t.TempDir()
+	flags.jsonOut = true
+	cmd := authCmdWithDeps(authDeps{
+		signIn: func(_ context.Context, opts browserauth.Options) (map[string]string, error) {
+			if opts.DevToolsSocket != "/tmp/viewer.sock" {
+				t.Fatalf("socket option = %q", opts.DevToolsSocket)
+			}
+			opts.Progress(browserauth.Event{Stage: browserauth.StageBrowserReady, DevToolsSocket: opts.DevToolsSocket, TargetID: "T1", VirtualDisplay: true})
+			return nil, errors.New("stop here")
+		},
+	})
+	silenceLikeRoot(cmd)
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--devtools-socket", "/tmp/viewer.sock"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected the fake sign-in error")
+	}
+	events := decodeAuthEvents(t, stdout.String())
+	if len(events) < 2 || events[1].Event != "browser_ready" || events[1].DevToolsSocket != "/tmp/viewer.sock" || events[1].TargetID != "T1" || !events[1].VirtualDisplay {
+		t.Fatalf("events = %+v", events)
+	}
+
+	conflict := authCmdWithDeps(authDeps{})
+	conflict.SetArgs([]string{"--devtools-socket", "/tmp/viewer.sock", "--cookies-file", "-"})
+	conflict.SetOut(&bytes.Buffer{})
+	conflict.SetErr(&bytes.Buffer{})
+	if err := conflict.Execute(); err == nil {
+		t.Fatal("--devtools-socket with --cookies-file was accepted")
 	}
 }
 
@@ -371,6 +440,41 @@ func TestErrorCodeClassification(t *testing.T) {
 	}
 }
 
+func TestExitCodeDistinguishesLoggedOutSession(t *testing.T) {
+	loggedOut := fmt.Errorf("sync: %w", gm.NewPairError(gm.CodeSessionLoggedOut, errors.New("logged out")))
+	if got := ExitCode(loggedOut); got != ExitAuthRequired {
+		t.Fatalf("logged-out exit = %d, want %d", got, ExitAuthRequired)
+	}
+	other := gm.NewPairError(gm.CodePairingInvalid, errors.New("relay"))
+	if got := ExitCode(other); got != 1 {
+		t.Fatalf("other pairing failure exit = %d, want 1", got)
+	}
+	if got := ExitCode(usageErrorf("bad")); got != 2 {
+		t.Fatalf("usage exit = %d, want 2", got)
+	}
+}
+
+func TestReportCommandErrorWritesOneJSONLineOnlyWithJSON(t *testing.T) {
+	err := gm.NewPairError(gm.CodeSessionLoggedOut, errors.New("logged out"))
+	var out bytes.Buffer
+	if got := reportCommandError(&out, false, err); got != err || out.Len() != 0 {
+		t.Fatalf("human mode wrote %q", out.String())
+	}
+	if got := reportCommandError(&out, true, nil); got != nil || out.Len() != 0 {
+		t.Fatalf("nil error wrote %q", out.String())
+	}
+	if got := reportCommandError(&out, true, err); got != err {
+		t.Fatal("error was not returned unchanged")
+	}
+	var line commandError
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &line); jsonErr != nil {
+		t.Fatalf("not one JSON object: %q", out.String())
+	}
+	if line.Event != "error" || line.Code != gm.CodeSessionLoggedOut || line.Message != "logged out" {
+		t.Fatalf("line = %+v", line)
+	}
+}
+
 func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
 	oldFlags := flags
 	t.Cleanup(func() { flags = oldFlags })
@@ -384,7 +488,7 @@ func TestCancelledBrowserResultDoesNotTouchSavedSession(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := authCmdWithBrowser(func(context.Context, string, func(string)) (map[string]string, error) {
+	cmd := authCmdWithBrowser(func(context.Context, browserauth.Options) (map[string]string, error) {
 		cancel()
 		return parseGoogleCookies([]byte(completeCookieJSON))
 	})

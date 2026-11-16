@@ -63,100 +63,7 @@ func syncCmd() *cobra.Command {
 			if recent < 0 {
 				return usageErrorf("--recent must not be negative")
 			}
-			layout, err := resolveLayout()
-			if err != nil {
-				return err
-			}
-			logger := newLogger()
-
-			ctx, cancel := signalContext(context.Background())
-			defer cancel()
-
-			st, err := store.Open(ctx, layout.Database)
-			if err != nil {
-				return fmt.Errorf("open store: %w", err)
-			}
-			defer st.Close()
-
-			client, err := gm.Open(layout, logger)
-			if err != nil {
-				return err
-			}
-
-			pump := gmsync.New(st, logger)
-			client.Subscribe(pump.Handle)
-
-			fmt.Fprintln(os.Stderr, "Connecting to Google Messages relay...")
-			if err := client.Connect(); err != nil {
-				return fmt.Errorf("connect: %w", err)
-			}
-			defer client.Disconnect()
-
-			if resp, err := client.Underlying().ListContacts(ctx); err != nil {
-				logger.Warn().Err(err).Msg("Contact import failed")
-			} else {
-				validContacts, valid := contactSnapshotRows(resp)
-				if !valid {
-					pump.Observe("snapshot_invalid")
-				} else {
-					pump.ObserveSnapshot("contacts", validContacts)
-				}
-				imported := pump.ImportContacts(ctx, resp.GetContacts())
-				logger.Info().Int("contacts", imported).Msg("Imported contacts")
-			}
-
-			if resp, err := client.Underlying().ListConversations(ctx, conversations, gmproto.ListConversationsRequest_INBOX); err != nil {
-				logger.Warn().Err(err).Msg("Conversation import failed")
-			} else {
-				validConversations, valid := conversationSnapshotRows(resp)
-				if !valid {
-					pump.Observe("snapshot_invalid")
-				} else {
-					pump.ObserveSnapshot("conversations", validConversations)
-				}
-				convs, msgs := 0, 0
-				for _, conv := range resp.GetConversations() {
-					if conv == nil || conv.GetConversationID() == "" {
-						continue
-					}
-					pump.Handle(conv)
-					convs++
-					if recent <= 0 {
-						continue
-					}
-					if history, err := client.Underlying().FetchMessages(ctx, conv.GetConversationID(), recent, nil); err != nil {
-						logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
-					} else {
-						msgs += pump.ImportMessages(ctx, history.GetMessages())
-					}
-				}
-				logger.Info().Int("conversations", convs).Int("messages", msgs).Msg("Imported recent conversation history")
-			}
-
-			if !follow {
-				select {
-				case err := <-pump.Fatal():
-					return err
-				default:
-				}
-				fmt.Fprintln(os.Stderr, "Initial sync pass finished (not a connectivity verdict). Pass --follow to keep receiving events.")
-				return nil
-			}
-
-			fmt.Fprintln(os.Stderr, "Connection requested. Waiting for phone events; process activity is not connectivity proof. Ctrl-C to stop.")
-			heartbeat := time.NewTicker(syncHeartbeatInterval)
-			defer heartbeat.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					fmt.Fprintln(os.Stderr, "Disconnecting...")
-					return nil
-				case err := <-pump.Fatal():
-					return err
-				case <-heartbeat.C:
-					pump.Observe("heartbeat")
-				}
-			}
+			return reportCommandError(cmd.OutOrStdout(), flags.jsonOut, runSync(cmd, follow, conversations, recent))
 		},
 	}
 	c.Flags().BoolVar(&follow, "follow", false, "stay connected and stream events until interrupted")
@@ -164,6 +71,103 @@ func syncCmd() *cobra.Command {
 	c.Flags().Int64Var(&recent, "recent", 10, "newest messages to fetch per listed conversation (0 lists conversations only)")
 	c.AddCommand(syncSendSettingsCmd())
 	return c
+}
+
+func runSync(cmd *cobra.Command, follow bool, conversations int, recent int64) error {
+	layout, err := resolveLayout()
+	if err != nil {
+		return err
+	}
+	logger := newLogger()
+
+	ctx, cancel := signalContext(context.Background())
+	defer cancel()
+
+	st, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+
+	client, err := gm.Open(layout, logger)
+	if err != nil {
+		return err
+	}
+
+	pump := gmsync.New(st, logger)
+	client.Subscribe(pump.Handle)
+
+	fmt.Fprintln(os.Stderr, "Connecting to Google Messages relay...")
+	if err := client.Connect(); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer client.Disconnect()
+
+	if resp, err := client.Underlying().ListContacts(ctx); err != nil {
+		logger.Warn().Err(err).Msg("Contact import failed")
+	} else {
+		validContacts, valid := contactSnapshotRows(resp)
+		if !valid {
+			pump.Observe("snapshot_invalid")
+		} else {
+			pump.ObserveSnapshot("contacts", validContacts)
+		}
+		imported := pump.ImportContacts(ctx, resp.GetContacts())
+		logger.Info().Int("contacts", imported).Msg("Imported contacts")
+	}
+
+	if resp, err := client.Underlying().ListConversations(ctx, conversations, gmproto.ListConversationsRequest_INBOX); err != nil {
+		logger.Warn().Err(err).Msg("Conversation import failed")
+	} else {
+		validConversations, valid := conversationSnapshotRows(resp)
+		if !valid {
+			pump.Observe("snapshot_invalid")
+		} else {
+			pump.ObserveSnapshot("conversations", validConversations)
+		}
+		convs, msgs := 0, 0
+		for _, conv := range resp.GetConversations() {
+			if conv == nil || conv.GetConversationID() == "" {
+				continue
+			}
+			pump.Handle(conv)
+			convs++
+			if recent <= 0 {
+				continue
+			}
+			if history, err := client.Underlying().FetchMessages(ctx, conv.GetConversationID(), recent, nil); err != nil {
+				logger.Debug().Err(err).Str("conversation_id", conv.GetConversationID()).Msg("Recent message import failed")
+			} else {
+				msgs += pump.ImportMessages(ctx, history.GetMessages())
+			}
+		}
+		logger.Info().Int("conversations", convs).Int("messages", msgs).Msg("Imported recent conversation history")
+	}
+
+	if !follow {
+		select {
+		case err := <-pump.Fatal():
+			return err
+		default:
+		}
+		fmt.Fprintln(os.Stderr, "Initial sync pass finished (not a connectivity verdict). Pass --follow to keep receiving events.")
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "Connection requested. Waiting for phone events; process activity is not connectivity proof. Ctrl-C to stop.")
+	heartbeat := time.NewTicker(syncHeartbeatInterval)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "Disconnecting...")
+			return nil
+		case err := <-pump.Fatal():
+			return err
+		case <-heartbeat.C:
+			pump.Observe("heartbeat")
+		}
+	}
 }
 
 func syncSendSettingsCmd() *cobra.Command {

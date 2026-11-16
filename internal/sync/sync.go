@@ -9,6 +9,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -83,11 +84,11 @@ func (p *Pump) Handle(evt any) {
 	case *events.PhoneRespondingAgain:
 		p.logger.Info().Msg("Phone responding again")
 	case *events.GaiaLoggedOut:
-		err := fmt.Errorf("phone reports logged-out state; re-run `gmcli auth`")
+		err := gm.NewPairError(gm.CodeSessionLoggedOut, errors.New("Google Account session was logged out; re-run `gmcli auth`"))
 		p.logger.Error().Err(err).Msg("libgm auth fatal error")
 		p.fail(err)
 	case *events.ListenFatalError:
-		err := fmt.Errorf("libgm listen fatal error: %w", e.Error)
+		err := gm.NewPairError(gm.CodePairingInvalid, fmt.Errorf("libgm listen fatal error: %w", e.Error))
 		p.logger.Error().Err(e.Error).Msg("libgm listen fatal error")
 		p.fail(err)
 	case *events.ListenTemporaryError:

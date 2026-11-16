@@ -4,7 +4,8 @@
 
 `gmcli` is a Go 1.26 CLI for Google Messages. `main.go` wires into the Cobra command tree in `cmd/`. Keep user-facing verbs and flags in `cmd/`, and reusable implementation in `internal/`:
 
-- `internal/gm/`: session, pairing, sync events, send/react, media.
+- `internal/gm/`: session, pairing, session inspect/validate/remove, sync events, send/react, media. Pairing and session failures carry stable codes (`PairError`); keep codes stable and document new ones in the README table.
+- `internal/browserauth/`: temporary browser sign-in, virtual display (Xvfb) and the DevTools Unix-socket relay for `auth --devtools-socket`.
 - `internal/store/`: SQLite schema, queries, aliases, message/contact persistence.
 - `internal/sync/`: event-to-store synchronization.
 - `internal/output/`: JSON and tabular rendering helpers.
@@ -22,7 +23,9 @@ Tests live beside their packages as `*_test.go`.
 - `go vet ./...` runs static checks used by CI.
 - `./gmcli --help` or `./gmcli <command> --help` validates command wiring while developing.
 
-Use `--store <tmpdir>` when exercising live commands to avoid touching real state.
+Use `--store <tmpdir>` (or `GMCLI_STORE`) when exercising live commands to avoid touching real state. `gmcli auth status` inspects a store without opening or migrating its database.
+
+`gmcli --json auth` streams NDJSON events; `auth status`, `auth remove`, and a failing `sync` print one JSON object. Exit codes: 0 success, 1 failure, 2 usage, 3 session logged out. New commands should follow the same shape.
 
 ## Coding Style & Naming Conventions
 

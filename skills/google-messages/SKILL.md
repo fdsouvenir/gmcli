@@ -2,7 +2,7 @@
 name: google-messages-local-archive
 description: Search and summarize your local Google Messages SMS/RCS history from OpenClaw. Ask who said what, find old texts, and get conversation context while your message archive stays on your machine and the bundled workflow stays read-only by default.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   compatibility: "OpenClaw >=2026.8.1; gmcli >=1.1.0"
   openclaw:
     homepage: https://github.com/fdsouvenir/gmcli
@@ -11,9 +11,9 @@ metadata:
     install:
       - id: go-install
         kind: go
-        module: github.com/fdsouvenir/gmcli@v1.2.0
+        module: github.com/fdsouvenir/gmcli@v1.3.0
         bins: ["gmcli"]
-        label: Install gmcli v1.2.0 with Go
+        label: Install gmcli v1.3.0 with Go
 ---
 
 # Google Messages Local Archive
@@ -199,6 +199,10 @@ Interpret the report by state:
 - If `paired` is false, no locally paired session is available. Tell the
   user to run `gmcli auth --help` and follow the pairing instructions themselves.
   `paired: true` only describes the saved session, not a reachable phone.
+  With gmcli 1.3.0 or newer, `gmcli --json --read-only auth status` answers
+  the pairing question alone without opening or migrating the archive; its
+  `verdict` is `paired`, `unpaired`, or `unreadable`. Do not pass `--online`
+  from this skill: it contacts the phone, which is the user's call.
 - `pairing_mode` identifies the saved session as `gaia` or `legacy_qr`;
   it does not establish current connectivity. Never read or request session
   tokens or Google cookies.
@@ -285,6 +289,8 @@ clear which content came from messages versus your own analysis.
 - `1 issue(s) detected` from `doctor` means surface the issues list and stop.
 - FTS syntax error from `messages search` means retry once using the literal
   phrase quoting from the search playbook, then stop if it still fails.
+- Exit status 3 (gmcli 1.3.0 or newer) means the saved Google Account session
+  was logged out. Tell the user to run `gmcli auth` again; do not retry.
 - Any other non-zero exit means quote the literal error from stderr and stop.
   Do not retry with different arguments unless the user asks.
 

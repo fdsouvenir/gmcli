@@ -87,22 +87,22 @@ clawhub skill publish "$(pwd)/skills/google-messages" \
   --slug google-messages-local-archive \
   --name "Google Messages Local Archive" \
   --owner fdsouvenir \
-  --version 1.2.0 \
-  --changelog "Configure one-shot sync with --conversations and --recent, including conversation-only discovery with --recent 0. Pin gmcli v1.2.0; archive queries remain read-only. Thanks to Don Petry (@don-petry) for PR #10." \
+  --version 1.3.0 \
+  --changelog "Pin gmcli v1.3.0. Prefer 'gmcli auth status' for the pairing question (offline, no archive migration), explain auth failures from the stable error code, and treat exit status 3 as a logged-out session. Archive queries remain read-only." \
   --tags latest,gmcli,google-messages,local,archive,sms,rcs,search,summarize,privacy
 ```
 
 Verify the registry metadata and files:
 
 ```sh
-clawhub inspect google-messages-local-archive --version 1.2.0 --files
+clawhub inspect google-messages-local-archive --version 1.3.0 --files
 ```
 
 Verify install in a temporary workspace:
 
 ```sh
 tmpdir="$(mktemp -d)"
-clawhub --workdir "$tmpdir" install google-messages-local-archive --version 1.2.0
+clawhub --workdir "$tmpdir" install google-messages-local-archive --version 1.3.0
 test -f "$tmpdir/skills/google-messages-local-archive/SKILL.md"
 rm -rf "$tmpdir"
 ```

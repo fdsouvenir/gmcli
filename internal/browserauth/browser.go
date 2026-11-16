@@ -32,6 +32,19 @@ const (
 	StageSignedIn     = "signed_in"     // credentials were captured; the browser is closing
 )
 
+// Event is one progress report from SignIn.
+type Event struct {
+	Stage string
+	// DevToolsSocket and TargetID are set on StageBrowserReady when
+	// Options.DevToolsSocket was requested: the Unix socket relaying Chrome's
+	// DevTools endpoint and the page target a viewer should attach to.
+	DevToolsSocket string
+	TargetID       string
+	// VirtualDisplay is true when gmcli started its own X server for the
+	// browser because the environment had none.
+	VirtualDisplay bool
+}
+
 // Error codes for browser sign-in failures.
 const (
 	CodeNoDisplay       = "no_display"        // Linux without DISPLAY or WAYLAND_DISPLAY
@@ -39,6 +52,16 @@ const (
 	CodeBrowserFailed   = "browser_failed"    // the browser did not start or stopped early
 	CodeBrowserTimeout  = "browser_timeout"   // the sign-in deadline passed
 	CodeCleanupFailed   = "cleanup_failed"    // the temporary profile could not be removed
+	CodeCancelled       = "cancelled"         // the caller cancelled (Ctrl-C, SIGTERM)
+)
+
+// profileRemoveAttempts and profileRemoveDelay bound the retry loop around
+// removing the temporary profile. Chrome's helper processes keep writing cache
+// and network state for a moment after the main process exits, which makes a
+// single RemoveAll fail with a non-empty directory.
+const (
+	profileRemoveAttempts = 8
+	profileRemoveDelay    = 250 * time.Millisecond
 )
 
 // Error carries a stable Code for scripts; the message stays human-readable
@@ -63,40 +86,89 @@ func codedErrorf(code string, format string, args ...any) error {
 	return &Error{code: code, err: fmt.Errorf(format, args...)}
 }
 
+// Options configures SignIn.
+type Options struct {
+	// BrowserPath selects the Chrome, Chromium or Edge executable; empty
+	// auto-detects.
+	BrowserPath string
+	// AccountHint, when set, pre-fills Google's account chooser with this
+	// address so the person lands on the intended account.
+	AccountHint string
+	// DevToolsSocket, when set, exposes the browser's DevTools endpoint on a
+	// private Unix socket at this path so a viewer can show the window and
+	// forward input. Without a desktop display, a virtual X server is started
+	// for the browser (Xvfb must be installed).
+	DevToolsSocket string
+	// Progress, when non-nil, is called with each stage as it is reached.
+	Progress func(Event)
+}
+
+// signInURL returns the account chooser address, carrying the hint when set.
+func signInURL(accountHint string) string {
+	if accountHint == "" {
+		return loginURL
+	}
+	u, _ := url.Parse(loginURL)
+	q := u.Query()
+	q.Set("Email", accountHint)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // SignIn opens a visible Chrome/Chromium window. It never reads an existing
 // browser profile, asks for a password, or writes an intermediate cookie file.
 // The caller should provide a deadline for the user-controlled login step.
-// progress, when non-nil, is called with each Stage constant as it is reached.
-func SignIn(ctx context.Context, browserPath string, progress func(stage string)) (cookies map[string]string, err error) {
+func SignIn(ctx context.Context, opts Options) (cookies map[string]string, err error) {
+	progress := opts.Progress
 	if progress == nil {
-		progress = func(string) {}
+		progress = func(Event) {}
 	}
-	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-		return nil, codedErrorf(CodeNoDisplay, "browser sign-in needs a desktop display; run gmcli auth on your desktop, or use --cookies-file - for piped input on this server (see gmcli auth --help)")
-	}
-	path, err := findBrowser(browserPath)
+	disp, err := ensureDisplay(ctx, opts.DevToolsSocket != "", exec.LookPath, defaultXvfb)
 	if err != nil {
 		return nil, err
 	}
-	browserCtx, cleanup, err := newBrowser(ctx, path)
+	defer disp.stop()
+	path, err := findBrowser(opts.BrowserPath)
+	if err != nil {
+		return nil, err
+	}
+	var extra []chromedp.ExecAllocatorOption
+	if len(disp.env) > 0 {
+		extra = append(extra, chromedp.Env(disp.env...))
+	}
+	browserCtx, port, cleanup, err := newBrowserWithPort(ctx, path, extra...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			cookies = nil
-			err = cleanupErr
+			// Keep the original failure first so its code wins (a cancelled
+			// sign-in stays "cancelled"), but never hide a profile left on disk.
+			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	if err := chromedp.Run(browserCtx, chromedp.Navigate(loginURL)); err != nil {
+	ready := Event{Stage: StageBrowserReady, VirtualDisplay: disp.virtual}
+	if opts.DevToolsSocket != "" {
+		relay, err := newDevToolsRelay(opts.DevToolsSocket, port)
+		if err != nil {
+			return nil, codedErrorf(CodeBrowserFailed, "%w", err)
+		}
+		defer relay.Close()
+		ready.DevToolsSocket = relay.path
+		if target := chromedp.FromContext(browserCtx).Target; target != nil {
+			ready.TargetID = target.TargetID.String()
+		}
+	}
+	if err := chromedp.Run(browserCtx, chromedp.Navigate(signInURL(opts.AccountHint))); err != nil {
 		return nil, browserError(ctx, "could not open Google sign-in")
 	}
-	progress(StageBrowserReady)
+	progress(ready)
 	cookies, err = waitForCookies(browserCtx, browserSnapshot, time.Second)
 	if err != nil {
 		return nil, browserError(ctx, "browser closed or disconnected before sign-in completed")
 	}
-	progress(StageSignedIn)
+	progress(Event{Stage: StageSignedIn})
 	return cookies, nil
 }
 
@@ -105,7 +177,7 @@ func browserError(ctx context.Context, message string) error {
 		return codedErrorf(CodeBrowserTimeout, "browser sign-in timed out; run gmcli auth again or increase --browser-timeout: %w", ctx.Err())
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return codedErrorf(CodeCancelled, "browser sign-in cancelled: %w", ctx.Err())
 	}
 	// Browser errors can include URLs, headers and process output. Never return
 	// that text to logs or the terminal after a user has started signing in.
@@ -113,17 +185,25 @@ func browserError(ctx context.Context, message string) error {
 }
 
 func newBrowser(ctx context.Context, path string, extra ...chromedp.ExecAllocatorOption) (context.Context, func() error, error) {
-	// Port zero puts Chromium in WebDriver mode, even for a human-controlled
+	browserCtx, _, cleanup, err := newBrowserWithPort(ctx, path, extra...)
+	return browserCtx, cleanup, err
+}
+
+// newBrowserWithPort starts the sign-in browser and also returns the loopback
+// DevTools port it listens on, for the optional viewer relay.
+func newBrowserWithPort(ctx context.Context, path string, extra ...chromedp.ExecAllocatorOption) (context.Context, int, func() error, error) {
+	// Port zero puts Chromium in WebDriver mode (navigator.webdriver becomes
+	// true and Google refuses the sign-in), even for a human-controlled
 	// sign-in. Choose an available loopback port before starting the browser.
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
-		return nil, nil, codedErrorf(CodeBrowserFailed, "could not allocate a local sign-in browser connection")
+		return nil, 0, nil, codedErrorf(CodeBrowserFailed, "could not allocate a local sign-in browser connection")
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
 	profile, err := os.MkdirTemp("", "gmcli-auth-")
 	if err != nil {
-		return nil, nil, codedErrorf(CodeBrowserFailed, "create temporary sign-in profile: %w", err)
+		return nil, 0, nil, codedErrorf(CodeBrowserFailed, "create temporary sign-in profile: %w", err)
 	}
 	// Use a normal, visible browser, without chromedp's automation defaults.
 	// DBSC binds credentials to Chrome; libgm needs reusable cookies. These
@@ -141,30 +221,62 @@ func newBrowser(ctx context.Context, path string, extra ...chromedp.ExecAllocato
 		chromedp.Flag("window-size", "960,800"),
 	}
 	opts = append(opts, extra...)
-	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, opts...)
+	// The browser's own lifetime is not tied to the caller's context on
+	// purpose. If it were, Ctrl-C would make chromedp kill Chrome outright, and
+	// Chrome's helper processes then keep writing cache and network state into
+	// the profile after it has been removed. Instead, the returned context is
+	// cancelled when the caller's is, and cleanup closes the browser gracefully
+	// (Browser.close) so every helper flushes and exits before removal.
+	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(context.Background(), opts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx,
 		chromedp.WithLogf(func(string, ...any) {}),
 		chromedp.WithErrorf(func(string, ...any) {}))
+	linked, cancelLinked := context.WithCancel(browserCtx)
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancelLinked()
+		case <-linked.Done():
+		}
+	}()
 	cleanup := func() error {
+		cancelLinked()
 		if browserCtx.Err() == nil && chromedp.FromContext(browserCtx).Browser != nil {
-			closeCtx, cancelClose := context.WithTimeout(browserCtx, 3*time.Second)
+			closeCtx, cancelClose := context.WithTimeout(browserCtx, 5*time.Second)
 			_ = chromedp.Cancel(closeCtx)
 			cancelClose()
 		}
 		cancelBrowser()
 		cancelAllocator() // wait for the process to exit before removing its data
-		if err := os.RemoveAll(profile); err != nil {
+		if err := removeAllRetry(profile, profileRemoveAttempts, profileRemoveDelay); err != nil {
 			return codedErrorf(CodeCleanupFailed, "could not remove temporary sign-in profile %s; remove it manually", profile)
 		}
 		return nil
 	}
-	if err := chromedp.Run(browserCtx); err != nil {
+	if err := chromedp.Run(linked); err != nil {
 		if cleanupErr := cleanup(); cleanupErr != nil {
-			return nil, nil, cleanupErr
+			return nil, 0, nil, cleanupErr
 		}
-		return nil, nil, browserError(ctx, "could not start the sign-in browser; install Chrome or Chromium, or select its executable with --browser")
+		return nil, 0, nil, browserError(ctx, "could not start the sign-in browser; install Chrome or Chromium, or select its executable with --browser")
 	}
-	return browserCtx, cleanup, nil
+	return linked, port, cleanup, nil
+}
+
+// removeAllRetry removes dir, retrying while late writers (browser helper
+// processes shutting down) keep recreating entries. It gives up after
+// attempts tries spaced by delay.
+func removeAllRetry(dir string, attempts int, delay time.Duration) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.RemoveAll(dir); err == nil {
+			return nil
+		}
+		if _, statErr := os.Lstat(dir); errors.Is(statErr, os.ErrNotExist) {
+			return nil
+		}
+		time.Sleep(delay)
+	}
+	return err
 }
 
 type snapshotFunc func(context.Context) (string, map[string]string, error)
