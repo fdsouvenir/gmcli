@@ -25,7 +25,8 @@ The new `health` object persists separate receipt timestamps (Unix milliseconds)
   retain discrepancies until a corrected snapshot of the matching kind arrives.
 - `phone_response_ms` / `phone`: actual phone data, successful list RPC (including
   empty responses), or upstream's phone-recovered event.
-- `invalidation`: terminal error, logout, disconnect, or pairing change.
+- `invalidation`: terminal error, logout, disconnect, or pairing change
+  (`session_changed` is recorded by both `gmcli auth` and `gmcli auth remove`).
   It remains latched through late events until the next connection attempt,
   which clears old evidence before collecting new observations.
 

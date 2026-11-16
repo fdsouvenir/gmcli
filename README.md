@@ -119,6 +119,9 @@ not available yet.
 - The phone must be online for sync, backfill, sends, and media downloads.
 - Account pairing requires short-lived access to Google Account cookies from a
   private browser window. They are as sensitive as a signed-in browser session.
+- A signed-in session can be logged out by Google at any time. Supervisors
+  should watch for exit code 3 (see [Exit codes](#exit-codes)) and prompt for
+  `gmcli auth` instead of restarting in a loop.
 - The SQLite database is local but unencrypted. Use filesystem encryption if
   you need at-rest protection.
 - The protocol depends on the unofficial `libgm` reverse-engineered Google
@@ -137,7 +140,17 @@ See [health semantics and schema compatibility](docs/connection-health.md).
 
 ### Pair with a Google Account
 
-Run:
+There are three ways to sign in. All of them end the same way: gmcli validates
+the Google Account session, and for a new pairing shows an emoji that you tap in
+Google Messages on your phone.
+
+| Where gmcli runs | Method | Needs |
+| --- | --- | --- |
+| Your desktop or laptop | `gmcli auth` opens a temporary browser window | Chrome, Chromium, or Edge |
+| A server, signed in from your laptop | `gmcli auth --devtools-socket` plus an SSH tunnel and Chrome's remote inspector | Chrome on the server, Xvfb if the server has no display |
+| Anywhere, manual fallback | `gmcli auth --cookies-file -` with a copied cURL request | A private Firefox window and developer tools |
+
+#### On a desktop
 
 ```sh
 gmcli auth
@@ -154,8 +167,7 @@ separate temporary browser profile, captures only the credentials needed for
 Google Messages, and removes the profile when finished or cancelled. It never
 reads your existing browser profile. The saved session is private (mode 0600).
 
-Chrome, Chromium, or Edge must be installed on the machine running `gmcli auth`,
-and a desktop display must be available. To select a browser or allow more time:
+To select a browser or allow more time:
 
 ```sh
 gmcli auth --browser /path/to/chrome
@@ -167,12 +179,57 @@ and refreshes the session without a new emoji prompt. Pass `--new` to deliberate
 create a new phone pairing. Pass `--account you@gmail.com` to name the account
 you intend to pair: the sign-in page opens on that account, and pairing stops
 with `wrong_account` before the emoji step if Google reports a different one or
-the saved pairing belongs to another account. A failed or cancelled attempt leaves the existing
-session file unchanged. Close the sign-in window or press Ctrl-C to cancel.
-Then run `gmcli sync --follow` to refresh the archive.
+the saved pairing belongs to another account. A failed or cancelled attempt leaves
+the existing session file unchanged. Close the sign-in window or press Ctrl-C to
+cancel. Then run `gmcli sync --follow` to refresh the archive.
 
 QR pairing has been retired by Google. Existing QR sessions can still be queried
 offline; running `auth` migrates to Google Account pairing.
+
+#### On a server, from your laptop
+
+The browser runs on the server, next to the archive, and you drive it from your
+own Chrome through Chrome's built-in remote inspector. Nothing is installed on the
+laptop and no cookies are copied anywhere.
+
+On the server:
+
+```sh
+gmcli auth --devtools-socket ~/gmcli-signin.sock
+```
+
+On the laptop, in a second terminal:
+
+```sh
+ssh -L 9222:/home/you/gmcli-signin.sock your-server
+```
+
+Then open `chrome://inspect` in Chrome, click **Configure…** next to *Discover
+network targets*, add `localhost:9222`, and click **inspect** under the *Sign
+in - Google Accounts* page. A DevTools window opens with a live view of the
+server's browser; the **Toggle screencast** button at the top left shows it if it
+is hidden. Sign in there as you would locally. When the server-side gmcli reports
+you are signed in, close the DevTools window and the SSH tunnel, then tap the
+emoji on your phone.
+
+How it works: gmcli starts Chrome on the server's display, or on a private
+virtual X server (install `xvfb`) when the server has none, and relays Chrome's
+DevTools endpoint over the Unix socket, mode 0600, so only your user can connect.
+The `browser_ready` event under `--json` carries `devtools_socket`, `target_id`,
+and `virtual_display` for programs that want to act as the viewer themselves;
+they speak ordinary DevTools HTTP and WebSocket over the socket, with a `Host`
+header of `127.0.0.1` because Chrome checks it. Sign-in detection, cookie
+capture, the emoji step, and cleanup are the same as on a desktop, and the
+socket is removed when gmcli exits.
+
+Chrome's headless mode is not used. Google refuses it ("This browser or app may
+not be secure") because headless Chrome reports `navigator.webdriver`. A normal
+Chrome window on Xvfb, started with gmcli's flags, is accepted; see
+[docs/research/server-browser-signin.md](docs/research/server-browser-signin.md).
+
+Chrome does not read proxy credentials from `HTTP_PROXY`-style variables. On a
+host that routes egress through an authenticated proxy, run `gmcli auth` with
+those variables unset or the sign-in page will not load.
 
 #### Scripted sign-in with `--json`
 
@@ -183,7 +240,7 @@ terminal text. Events arrive in this order; the final line is `complete` or
 
 ```
 {"event":"browser_starting"}
-{"event":"browser_ready"}
+{"event":"browser_ready"}            # with --devtools-socket: + devtools_socket, target_id, virtual_display
 {"event":"signed_in"}
 {"event":"validating"}
 {"event":"emoji","emoji":"🦊"}
@@ -197,7 +254,7 @@ pairing emits no `emoji` or `waiting_for_phone` and completes with
 
 | Code | Meaning |
 | --- | --- |
-| `no_display` | Linux without `DISPLAY` or `WAYLAND_DISPLAY`; use `--cookies-file`. |
+| `no_display` | Linux without `DISPLAY` or `WAYLAND_DISPLAY`, and no Xvfb for `--devtools-socket`. |
 | `browser_not_found` | No Chrome, Chromium, or Edge; pass `--browser`. |
 | `browser_failed` | The browser did not start or closed before sign-in finished. |
 | `browser_timeout` | `--browser-timeout` passed before sign-in finished. |
@@ -230,12 +287,11 @@ should treat 3 as "stop restarting and alert", not as a transient failure. Under
 stdout when it stops with an error, so the code can be read without parsing the
 stderr log.
 
-#### Manual sign-in and remote servers
+#### Manual fallback: copied cookies
 
-The browser flow runs on the same machine as gmcli. For a server without a
-desktop, a browser Google refuses to sign into, or an automated input workflow,
-`--cookies-file` still accepts a copied cURL request or cookie JSON. You can pipe
-the clipboard directly without creating a file:
+For a browser Google refuses to sign into, or an automated input workflow,
+`--cookies-file` accepts a copied cURL request or cookie JSON. You can pipe the
+clipboard directly without creating a file:
 
 1. Open a private Firefox window and visit
    <https://accounts.google.com/AccountChooser?continue=https://messages.google.com/web/config>.
@@ -360,17 +416,17 @@ gmcli --json chats list | jq '.[0].name'
 cmd/                  Cobra command tree (auth [status|remove], sync, version,
                       doctor, messages, contacts, chats, send, media)
 internal/
-  browserauth/        Temporary browser sign-in and credential capture
+  browserauth/        Temporary browser sign-in, virtual display, DevTools relay
   gm/                 libgm wrapper — pairing, session, events, send/react,
                       WaitForReady, DownloadMedia
   store/              SQLite + FTS5 store (schema v4: separate connection health evidence)
   sync/               Event-to-store pump
   output/             Shared JSON / tab-aligned table renderers
-  paths/              XDG path resolution (XDG_STATE_HOME)
+  paths/              Store resolution (--store, GMCLI_STORE, XDG_STATE_HOME)
   logging/            zerolog setup
 skills/
   google-messages/    LLM skill bundle - archive playbook for assistants
-docs/research/        Phase 1 research notes
+docs/research/        Design notes, protocol research, server sign-in spike
 ```
 
 ## Development checks

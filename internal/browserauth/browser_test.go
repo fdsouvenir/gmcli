@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,54 @@ func TestSignInURLCarriesAccountHint(t *testing.T) {
 	}
 	if got.Query().Get("continue") != configURL {
 		t.Fatalf("hint dropped the continue target: %s", got)
+	}
+}
+
+func TestRemoveAllRetryOutlastsLateWriter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "profile")
+	if err := os.MkdirAll(filepath.Join(dir, "Default"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a helper process that writes once more shortly after removal starts.
+	stop := make(chan struct{})
+	go func() {
+		for i := 0; i < 3; i++ {
+			_ = os.MkdirAll(filepath.Join(dir, "Default", "Cache"), 0o700)
+			_ = os.WriteFile(filepath.Join(dir, "Default", "Cache", "index"), []byte("x"), 0o600)
+			time.Sleep(20 * time.Millisecond)
+		}
+		close(stop)
+	}()
+	err := removeAllRetry(dir, 20, 25*time.Millisecond)
+	<-stop
+	if err != nil {
+		t.Fatalf("remove with late writer: %v", err)
+	}
+	// The writer may have recreated the directory after a successful removal;
+	// what matters is that the retry loop reported success rather than the
+	// ENOTEMPTY a single RemoveAll can hit. A quiet directory must now go away.
+	if err := removeAllRetry(dir, 1, 0); err != nil {
+		t.Fatalf("final removal: %v", err)
+	}
+	if _, statErr := os.Lstat(dir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("profile directory remains")
+	}
+	if err := removeAllRetry(filepath.Join(t.TempDir(), "missing"), 1, 0); err != nil {
+		t.Fatalf("missing dir should be success: %v", err)
+	}
+}
+
+func TestBrowserErrorCodesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := browserError(ctx, "closed")
+	var coded *Error
+	if !errors.As(err, &coded) || coded.Code() != CodeCancelled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled browser error = %v", err)
+	}
+	joined := errors.Join(err, codedErrorf(CodeCleanupFailed, "profile left"))
+	if !errors.As(joined, &coded) || coded.Code() != CodeCancelled {
+		t.Fatalf("cancellation did not keep precedence in joined error: %v", joined)
 	}
 }
 
