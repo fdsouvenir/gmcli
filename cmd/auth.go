@@ -148,6 +148,8 @@ func authCmdWithDeps(deps authDeps) *cobra.Command {
 	c.Flags().BoolVar(&allowInsecure, "allow-insecure-cookie-file", false, "allow group/world-readable cookie input files")
 	c.Flags().StringVar(&account, "account", "", "Google Account address to pair; refuses any other account")
 	c.MarkFlagsMutuallyExclusive("browser", "cookies-file")
+	c.AddCommand(authStatusCmd())
+	c.AddCommand(authRemoveCmd())
 	return c
 }
 

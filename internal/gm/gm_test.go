@@ -431,12 +431,14 @@ type fakeGaiaClient struct {
 	startErr              error
 	finishErr             error
 	connectErr            error
+	unpairErr             error
 	emoji                 string
 	phoneID               string
 	fetched               bool
 	started               bool
 	finished              bool
 	connected             bool
+	unpaired              bool
 	disconnected          bool
 	cancelAfterFinish     context.CancelFunc
 	cancelAfterValidation context.CancelFunc
@@ -471,6 +473,16 @@ func (f *fakeGaiaClient) ValidateConnection(context.Context) error {
 		f.cancelAfterValidation()
 	}
 	return f.connectErr
+}
+
+func (f *fakeGaiaClient) Connect() error {
+	f.connected = true
+	return f.connectErr
+}
+
+func (f *fakeGaiaClient) Unpair(context.Context) error {
+	f.unpaired = true
+	return f.unpairErr
 }
 
 func (f *fakeGaiaClient) Disconnect() { f.disconnected = true }
@@ -762,6 +774,8 @@ func (f *blockingGaiaClient) FinishGaiaPairing(context.Context, *libgm.PairingSe
 	return "", nil
 }
 func (f *blockingGaiaClient) ValidateConnection(context.Context) error { return nil }
+func (f *blockingGaiaClient) Connect() error                           { return nil }
+func (f *blockingGaiaClient) Unpair(context.Context) error             { return nil }
 func (f *blockingGaiaClient) Disconnect()                              { close(f.disconnected) }
 
 func TestAuthenticateGaiaCancellationBoundsBlockingStart(t *testing.T) {

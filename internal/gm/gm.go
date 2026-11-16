@@ -716,6 +716,8 @@ type gaiaPairingClient interface {
 	StartGaiaPairing(context.Context) (string, *libgm.PairingSession, error)
 	FinishGaiaPairing(context.Context, *libgm.PairingSession) (string, error)
 	ValidateConnection(context.Context) error
+	Connect() error
+	Unpair(context.Context) error
 	Disconnect()
 }
 
@@ -736,13 +738,13 @@ func (c *libgmGaiaClient) ValidateConnection(ctx context.Context) error {
 		var err error
 		switch e := evt.(type) {
 		case *events.ListenFatalError:
-			err = e.Error
+			err = keepPairCode(CodePairingInvalid, "%w", e.Error)
 		case *events.GaiaLoggedOut:
-			err = errors.New("Google Account session was logged out")
+			err = pairErrorf(CodeSessionLoggedOut, "Google Account session was logged out")
 		case *events.PhoneNotResponding:
-			err = errors.New("paired phone is not responding")
+			err = pairErrorf(CodePhoneUnreachable, "paired phone is not responding")
 		case *events.PingFailed:
-			err = e.Error
+			err = keepPairCode(CodePhoneUnreachable, "%w", e.Error)
 		}
 		if err != nil {
 			select {
@@ -928,7 +930,7 @@ func reauthenticateGaia(
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, pairErrorf(CodePairingInvalid, "validate existing Google Messages pairing: %w", err)
+		return nil, keepPairCode(CodePairingInvalid, "validate existing Google Messages pairing: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

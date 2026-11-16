@@ -199,6 +199,10 @@ Interpret the report by state:
 - If `paired` is false, no locally paired session is available. Tell the
   user to run `gmcli auth --help` and follow the pairing instructions themselves.
   `paired: true` only describes the saved session, not a reachable phone.
+  With gmcli 1.3.0 or newer, `gmcli --json --read-only auth status` answers
+  the pairing question alone without opening or migrating the archive; its
+  `verdict` is `paired`, `unpaired`, or `unreadable`. Do not pass `--online`
+  from this skill: it contacts the phone, which is the user's call.
 - `pairing_mode` identifies the saved session as `gaia` or `legacy_qr`;
   it does not establish current connectivity. Never read or request session
   tokens or Google cookies.

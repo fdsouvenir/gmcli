@@ -210,6 +210,9 @@ pairing emits no `emoji` or `waiting_for_phone` and completes with
 | `pairing_timeout` | The phone did not confirm within five minutes. |
 | `pairing_invalid` | The relay rejected the saved pairing during a refresh. |
 | `session_write_failed` | `session.json` could not be written. |
+| `no_session` / `session_unreadable` / `not_paired` | From `auth status` and `auth remove`: no file, unparsable file, or no paired device. |
+| `session_logged_out` | Google reports the account session is gone; run `gmcli auth` again. |
+| `unpair_failed` | `auth remove` could not reach the phone; retry or pass `--local-only`. |
 | `cancelled` / `timeout` / `usage` / `failed` | Interrupted, deadline passed, invalid flags, or any other failure. |
 
 Cookie values never appear in events. Exit codes are unchanged: 0 success,
@@ -253,6 +256,28 @@ Google's Device Bound Session Credentials can prevent cookies being used
 outside Chrome. The automatic flow disables that feature only for its temporary
 browser process. The manual flow uses Firefox to avoid that restriction.
 See the [upstream authentication documentation](https://docs.mau.fi/bridges/go/gmessages/authentication.html).
+
+### Check or remove a pairing
+
+```sh
+gmcli auth status            # offline: is a paired session saved, for which account, since when
+gmcli auth status --online   # also connect and require a response from the phone
+gmcli auth remove            # unpair the phone, then delete session.json; the archive is kept
+gmcli auth remove --local-only   # delete session.json without contacting the phone
+```
+
+`auth status` reads only `session.json` and never opens or migrates the SQLite
+store, so it is safe for supervisors and scripts to call often. It exits 0 when a
+paired session is saved (and, with `--online`, the phone answered), otherwise 1.
+With `--json` it prints one object with `verdict` (`paired`, `unpaired`,
+`unreadable`), the pairing fields, `session_updated_at`, `session_age_seconds`,
+and, after `--online`, an `online` object whose `code` is one of
+`session_logged_out`, `phone_unreachable`, or `pairing_invalid` on failure.
+
+`auth remove` asks the phone to drop this device first. If the phone does not
+acknowledge, the session is kept and the error has code `unpair_failed`; use
+`--local-only` when the pairing was already revoked from the phone. Removing a
+pairing invalidates recorded connection health but never creates an archive.
 
 ### Sync and query
 
@@ -322,8 +347,8 @@ gmcli --json chats list | jq '.[0].name'
 ## Layout
 
 ```
-cmd/                  Cobra command tree (auth, sync, version, doctor,
-                      messages, contacts, chats, send, media)
+cmd/                  Cobra command tree (auth [status|remove], sync, version,
+                      doctor, messages, contacts, chats, send, media)
 internal/
   browserauth/        Temporary browser sign-in and credential capture
   gm/                 libgm wrapper — pairing, session, events, send/react,
