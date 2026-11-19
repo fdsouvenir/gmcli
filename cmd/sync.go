@@ -116,7 +116,7 @@ func runSync(cmd *cobra.Command, follow bool, conversations int, recent int64) e
 		logger.Info().Int("contacts", imported).Msg("Imported contacts")
 	}
 
-	if resp, err := client.Underlying().ListConversations(ctx, conversations, gmproto.ListConversationsRequest_INBOX); err != nil {
+	if resp, err := client.Underlying().ListConversations(ctx, &gmproto.ListConversationsRequest{Count: int64(conversations), Folder: gmproto.ListConversationsRequest_INBOX}); err != nil {
 		logger.Warn().Err(err).Msg("Conversation import failed")
 	} else {
 		validConversations, valid := conversationSnapshotRows(resp)
