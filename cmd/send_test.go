@@ -86,7 +86,7 @@ func TestSendTextResultJSONIncludesSendMode(t *testing.T) {
 
 func TestCachedDefaultSMSApp(t *testing.T) {
 	settings := &gmproto.Settings{
-		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: true},
+		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: proto.Bool(true)},
 	}
 	raw, err := proto.Marshal(settings)
 	if err != nil {

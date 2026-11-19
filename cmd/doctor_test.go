@@ -76,7 +76,7 @@ func TestRunDoctorReportsLastSyncActivityTime(t *testing.T) {
 				SIMPayload: &gmproto.SIMPayload{Two: 1, SIMNumber: 1},
 			},
 		}},
-		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: true},
+		RCSSettings: &gmproto.RCSSettings{IsDefaultSMSApp: proto.Bool(true)},
 	}
 	raw, err := proto.Marshal(settings)
 	if err != nil {

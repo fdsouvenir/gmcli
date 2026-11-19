@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"go.mau.fi/util/exhttp"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
@@ -90,7 +92,7 @@ func Open(layout paths.Layout, logger zerolog.Logger) (*Client, error) {
 		layout: layout,
 		logger: logger,
 	}
-	c.libgm = libgm.NewClient(auth, nil, logger)
+	c.libgm = libgm.NewClient(auth, nil, logger, exhttp.SensibleClientSettings)
 	c.libgm.SetEventHandler(c.dispatch)
 	return c, nil
 }
@@ -110,7 +112,7 @@ func (c *Client) Connect() error {
 	c.ready = false
 	c.mu.Unlock()
 	c.dispatch(&ConnectionStarting{})
-	err := c.libgm.Connect()
+	err := c.libgm.Connect(context.Background())
 	if err != nil {
 		c.dispatch(&events.ListenFatalError{Error: err})
 	} else {
@@ -609,7 +611,12 @@ func (c *Client) DownloadMedia(mediaID string, key []byte) ([]byte, error) {
 	if mediaID == "" {
 		return nil, fmt.Errorf("media id is required")
 	}
-	return c.libgm.DownloadMedia(mediaID, key)
+	body, err := c.libgm.DownloadMedia(context.Background(), mediaID, key)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	return io.ReadAll(body)
 }
 
 // AuthSnapshot returns a deep copy of the current AuthData by JSON
@@ -725,6 +732,18 @@ type libgmGaiaClient struct {
 	*libgm.Client
 }
 
+// Connect keeps the context-free signature used across gmcli. libgm ties the
+// long-poll loop to the context it receives, so it must outlive the caller.
+func (c *libgmGaiaClient) Connect() error {
+	return c.Client.Connect(context.Background())
+}
+
+// StartGaiaPairing passes the pairing context as libgm's background context
+// too: it only drives the reconnect libgm starts after a successful pairing.
+func (c *libgmGaiaClient) StartGaiaPairing(ctx context.Context) (string, *libgm.PairingSession, error) {
+	return c.Client.StartGaiaPairing(ctx, ctx)
+}
+
 func (c *libgmGaiaClient) ConfigEmail() string {
 	return c.Config.GetDeviceInfo().GetEmail()
 }
@@ -778,7 +797,7 @@ func (c *libgmGaiaClient) ValidateConnection(ctx context.Context) error {
 type gaiaClientFactory func(*libgm.AuthData, zerolog.Logger) gaiaPairingClient
 
 func newGaiaClient(auth *libgm.AuthData, logger zerolog.Logger) gaiaPairingClient {
-	return &libgmGaiaClient{Client: libgm.NewClient(auth, nil, logger)}
+	return &libgmGaiaClient{Client: libgm.NewClient(auth, nil, logger, exhttp.SensibleClientSettings)}
 }
 
 // PairOptions tunes AuthenticateGaia.
